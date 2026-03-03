@@ -1,0 +1,140 @@
+services:
+  # ─── ZooKeeper ──────────────────────────────────────────────────
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    container_name: zookeeper
+    ports:
+      - "2181:2181"
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    healthcheck:
+      test: [ "CMD", "bash", "-c", "echo srvr | timeout 2 bash -c 'cat > /dev/tcp/localhost/2181' 2>/dev/null && exit 0 || exit 1" ]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+    networks:
+      - scheduler-net
+
+  # ─── PostgreSQL ─────────────────────────────────────────────────
+  postgres:
+    image: postgres:15-alpine
+    container_name: postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: jobscheduler
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U postgres" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - scheduler-net
+
+  # ─── API Server ─────────────────────────────────────────────────
+  api-server:
+    build:
+      context: ./api-server
+      dockerfile: Dockerfile
+    container_name: api-server
+    ports:
+      - "8080:8080"
+    environment:
+      PORT: "8080"
+      ZK_HOST: "zookeeper:2181"
+      DATABASE_URL: "host=postgres user=postgres password=postgres dbname=jobscheduler sslmode=disable"
+      GIN_MODE: "release"
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - scheduler-net
+
+  # ─── Worker 1 ───────────────────────────────────────────────────
+  worker-1:
+    build:
+      context: ./worker
+      dockerfile: Dockerfile
+    container_name: worker-1
+    environment:
+      WORKER_ID: "worker-1"
+      ZK_HOST: "zookeeper:2181"
+      DATABASE_URL: "host=postgres user=postgres password=postgres dbname=jobscheduler sslmode=disable"
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - scheduler-net
+
+  # ─── Worker 2 ───────────────────────────────────────────────────
+  worker-2:
+    build:
+      context: ./worker
+      dockerfile: Dockerfile
+    container_name: worker-2
+    environment:
+      WORKER_ID: "worker-2"
+      ZK_HOST: "zookeeper:2181"
+      DATABASE_URL: "host=postgres user=postgres password=postgres dbname=jobscheduler sslmode=disable"
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - scheduler-net
+
+  # ─── Worker 3 ───────────────────────────────────────────────────
+  worker-3:
+    build:
+      context: ./worker
+      dockerfile: Dockerfile
+    container_name: worker-3
+    environment:
+      WORKER_ID: "worker-3"
+      ZK_HOST: "zookeeper:2181"
+      DATABASE_URL: "host=postgres user=postgres password=postgres dbname=jobscheduler sslmode=disable"
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - scheduler-net
+
+  # ─── Frontend ───────────────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - api-server
+    restart: unless-stopped
+    networks:
+      - scheduler-net
+
+# ─── Volumes & Networks ─────────────────────────────────────────
+volumes:
+  postgres-data:
+
+
+networks:
+  scheduler-net:
+    driver: bridge
