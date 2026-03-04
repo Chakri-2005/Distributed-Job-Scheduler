@@ -2,6 +2,7 @@ package main
 
 import (
 	"database/sql"
+	"encoding/json"
 	"net/http"
 	"strconv"
 
@@ -12,6 +13,28 @@ import (
 func RegisterRoutes(r *gin.Engine, zkClient *ZKClient, db *sql.DB) {
 	r.GET("/health", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
+	})
+
+	// GET /node-info - returns this node's role and metadata
+	r.GET("/node-info", func(c *gin.Context) {
+		if clusterNode == nil {
+			c.JSON(http.StatusOK, gin.H{
+				"node_id": "unknown",
+				"role":    "slave",
+				"ip":      "",
+				"port":    "",
+				"status":  "starting",
+			})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{
+			"node_id":   clusterNode.NodeID,
+			"role":      clusterNode.Role,
+			"ip":        clusterNode.IP,
+			"port":      clusterNode.Port,
+			"status":    "active",
+			"is_leader": clusterNode.IsLeader,
+		})
 	})
 
 	// GET /leader - returns current leader node
@@ -35,7 +58,6 @@ func RegisterRoutes(r *gin.Engine, zkClient *ZKClient, db *sql.DB) {
 			workers = []string{}
 		}
 
-		// Get leader to mark which worker is master
 		leader, _ := zkClient.GetLeader()
 
 		type WorkerInfo struct {
@@ -46,14 +68,48 @@ func RegisterRoutes(r *gin.Engine, zkClient *ZKClient, db *sql.DB) {
 
 		result := make([]WorkerInfo, 0, len(workers))
 		for _, w := range workers {
+			status := "active"
+			// Check node status from /nodes
+			workerBase := w
+			// Try to get the worker base name (before the _sequence)
+			if idx := len(w) - 1; idx > 0 {
+				for i := idx; i >= 0; i-- {
+					if w[i] == '_' {
+						workerBase = w[:i]
+						break
+					}
+				}
+			}
+			nodePath := "/nodes/" + workerBase
+			data, _, err := zkClient.conn.Get(nodePath)
+			if err == nil {
+				var info NodeInfo
+				if json.Unmarshal(data, &info) == nil {
+					status = info.Status
+				}
+			}
+
 			result = append(result, WorkerInfo{
 				ID:       w,
 				IsLeader: w == leader,
-				Status:   "active",
+				Status:   status,
 			})
 		}
 
 		c.JSON(http.StatusOK, gin.H{"workers": result, "count": len(result)})
+	})
+
+	// GET /nodes - returns all cluster nodes (from /nodes in ZK)
+	r.GET("/nodes", func(c *gin.Context) {
+		nodes, err := GetClusterNodes(zkClient)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		if nodes == nil {
+			nodes = []NodeInfo{}
+		}
+		c.JSON(http.StatusOK, gin.H{"nodes": nodes, "count": len(nodes)})
 	})
 
 	// GET /tasks - returns all tasks from PostgreSQL
@@ -79,7 +135,6 @@ func RegisterRoutes(r *gin.Engine, zkClient *ZKClient, db *sql.DB) {
 			return
 		}
 
-		// Validate task type
 		validTypes := map[string]bool{
 			"batch_processing":   true,
 			"email_notification": true,
@@ -89,21 +144,16 @@ func RegisterRoutes(r *gin.Engine, zkClient *ZKClient, db *sql.DB) {
 			req.TaskType = "batch_processing"
 		}
 		if !validTypes[req.TaskType] {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid task_type. Must be: batch_processing, email_notification, or ai_job"})
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid task_type"})
 			return
 		}
 
-		// Validate priority
-		validPriorities := map[string]bool{
-			"high":   true,
-			"medium": true,
-			"low":    true,
-		}
+		validPriorities := map[string]bool{"high": true, "medium": true, "low": true}
 		if req.Priority == "" {
 			req.Priority = "medium"
 		}
 		if !validPriorities[req.Priority] {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid priority. Must be: high, medium, or low"})
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid priority"})
 			return
 		}
 
@@ -113,9 +163,7 @@ func RegisterRoutes(r *gin.Engine, zkClient *ZKClient, db *sql.DB) {
 			return
 		}
 
-		// Create task znode so workers can detect it
 		if err := zkClient.CreateTaskZNode(task.ID); err != nil {
-			// Non-fatal: log but still return success
 			c.JSON(http.StatusCreated, gin.H{
 				"task":    task,
 				"warning": "task created in DB but ZK znode failed: " + err.Error(),
@@ -123,13 +171,60 @@ func RegisterRoutes(r *gin.Engine, zkClient *ZKClient, db *sql.DB) {
 			return
 		}
 
-		// Log event
-		CreateEvent(db, "task_created", "api-server", "Task '"+task.Name+"' created (type: "+task.TaskType+", priority: "+task.Priority+")")
+		// Determine source node
+		sourceNode := "api-server"
+		if clusterNode != nil {
+			sourceNode = clusterNode.NodeID
+		}
+
+		CreateEvent(db, "task_created", sourceNode,
+			"Task '"+task.Name+"' created (type: "+task.TaskType+", priority: "+task.Priority+")")
+
+		// Broadcast task creation via WebSocket
+		if hub != nil {
+			msg, _ := json.Marshal(map[string]interface{}{
+				"type":    "task_created",
+				"task_id": task.ID,
+				"name":    task.Name,
+				"status":  "pending",
+			})
+			hub.Broadcast(msg)
+		}
 
 		c.JSON(http.StatusCreated, gin.H{"task": task})
 	})
 
-	// GET /assignments - returns assignments per worker from ZooKeeper + DB
+	// PUT /workers/:id/deactivate - deactivate a worker (master only)
+	r.PUT("/workers/:id/deactivate", func(c *gin.Context) {
+		if clusterNode != nil && !clusterNode.IsLeader {
+			c.JSON(http.StatusForbidden, gin.H{"error": "Only the master node can deactivate workers"})
+			return
+		}
+
+		workerID := c.Param("id")
+		if err := DeactivateWorker(zkClient, db, workerID); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"message": "Worker " + workerID + " deactivated"})
+	})
+
+	// PUT /workers/:id/activate - activate a worker (master only)
+	r.PUT("/workers/:id/activate", func(c *gin.Context) {
+		if clusterNode != nil && !clusterNode.IsLeader {
+			c.JSON(http.StatusForbidden, gin.H{"error": "Only the master node can activate workers"})
+			return
+		}
+
+		workerID := c.Param("id")
+		if err := ActivateWorker(zkClient, db, workerID); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"message": "Worker " + workerID + " activated"})
+	})
+
+	// GET /assignments - returns assignments per worker from DB
 	r.GET("/assignments", func(c *gin.Context) {
 		assignments, err := GetAssignments(db)
 		if err != nil {
@@ -137,7 +232,6 @@ func RegisterRoutes(r *gin.Engine, zkClient *ZKClient, db *sql.DB) {
 			return
 		}
 
-		// Also get live ZK assignments
 		zkAssignments, _ := zkClient.GetAssignmentZNodes()
 
 		c.JSON(http.StatusOK, gin.H{
@@ -148,7 +242,6 @@ func RegisterRoutes(r *gin.Engine, zkClient *ZKClient, db *sql.DB) {
 
 	// GET /stats - returns task count by status and by type
 	r.GET("/stats", func(c *gin.Context) {
-		// Stats by status
 		rows, err := db.Query(`SELECT status, COUNT(*) as count FROM tasks GROUP BY status`)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -170,7 +263,6 @@ func RegisterRoutes(r *gin.Engine, zkClient *ZKClient, db *sql.DB) {
 			stats = []Stat{}
 		}
 
-		// Stats by task type
 		typeRows, err := db.Query(`SELECT task_type, COUNT(*) as count FROM tasks GROUP BY task_type`)
 		if err != nil {
 			c.JSON(http.StatusOK, gin.H{"stats": stats, "type_stats": []Stat{}})
@@ -241,4 +333,7 @@ func RegisterRoutes(r *gin.Engine, zkClient *ZKClient, db *sql.DB) {
 		}
 		c.JSON(http.StatusOK, gin.H{"events": events, "count": len(events)})
 	})
+
+	// WebSocket endpoint
+	r.GET("/ws", HandleWebSocket)
 }

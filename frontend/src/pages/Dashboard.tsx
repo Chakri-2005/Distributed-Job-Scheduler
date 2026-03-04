@@ -1,4 +1,4 @@
-import type { Task, Worker, Stat, SystemEvent } from '../services/api';
+import type { Task, Worker, Stat, SystemEvent, NodeInfoData } from '../services/api';
 import LeaderCard from '../components/LeaderCard';
 import WorkerList from '../components/WorkerList';
 import TaskList from '../components/TaskList';
@@ -16,17 +16,23 @@ interface DashboardProps {
     events: SystemEvent[];
     loading: boolean;
     error: string;
+    nodeInfo: NodeInfoData | null;
     onCreateTask: (name: string, description: string, taskType: TaskType, priority: Priority) => Promise<void>;
     onRefresh: () => void;
+    onDeactivateWorker: (workerId: string) => Promise<void>;
+    onActivateWorker: (workerId: string) => Promise<void>;
 }
 
 export default function Dashboard({
-    leader, workers, tasks, stats, typeStats, events, loading, error, onCreateTask, onRefresh
+    leader, workers, tasks, stats, typeStats, events, loading, error,
+    nodeInfo, onCreateTask, onRefresh, onDeactivateWorker, onActivateWorker
 }: DashboardProps) {
     const pendingCount = tasks.filter(t => t.status === 'pending').length;
     const runningCount = tasks.filter(t => t.status === 'running').length;
     const completedCount = tasks.filter(t => t.status === 'completed').length;
     const failedCount = tasks.filter(t => t.status === 'failed').length;
+
+    const isMaster = nodeInfo?.role === 'master' || nodeInfo?.is_leader === true;
 
     return (
         <div className="dashboard">
@@ -37,6 +43,11 @@ export default function Dashboard({
                         <span className="logo-text">DistributedQ</span>
                     </div>
                     <span className="header-subtitle">Distributed Job Scheduler</span>
+                    {nodeInfo && (
+                        <span className={`node-role-badge ${isMaster ? 'role-master' : 'role-slave'}`}>
+                            {isMaster ? '👑 Master' : '🔧 Slave'} • {nodeInfo.node_id} • :{nodeInfo.port}
+                        </span>
+                    )}
                 </div>
                 <div className="header-right">
                     <div className={`connection-status ${error ? 'disconnected' : 'connected'}`}>
@@ -99,7 +110,13 @@ export default function Dashboard({
 
                 {/* Third Row: Workers + Event Log */}
                 <div className="bottom-row">
-                    <WorkerList workers={workers} leader={leader} />
+                    <WorkerList
+                        workers={workers}
+                        leader={leader}
+                        isMaster={isMaster}
+                        onDeactivate={onDeactivateWorker}
+                        onActivate={onActivateWorker}
+                    />
                     <EventLog events={events} />
                 </div>
 

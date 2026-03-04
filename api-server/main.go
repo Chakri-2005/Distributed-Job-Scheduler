@@ -3,7 +3,9 @@ package main
 import (
 	"fmt"
 	"log"
+	"net/http"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/gin-contrib/cors"
@@ -11,8 +13,11 @@ import (
 )
 
 func main() {
+	nodeID := getEnv("NODE_ID", "master")
+	port := getEnv("PORT", "8080")
 	zkHost := getEnv("ZK_HOST", "localhost:2181")
 	dbDSN := getEnv("DATABASE_URL", "host=localhost user=postgres password=postgres dbname=jobscheduler sslmode=disable")
+	localIP := getEnv("NODE_IP", GetLocalIP())
 
 	// Initialize DB
 	db, err := InitDB(dbDSN)
@@ -36,7 +41,21 @@ func main() {
 	// Ensure base znodes exist
 	zkClient.EnsureZNodes()
 
-	// Start scheduler (watches ZK tasks and assigns to workers if leader)
+	// Initialize WebSocket hub
+	hub = NewWSHub()
+	go hub.Run()
+
+	// Initialize cluster node (handles election + task assignment)
+	clusterNode = NewClusterNode(nodeID, port, localIP, zkClient, db)
+	if err := clusterNode.Register(); err != nil {
+		log.Fatalf("Failed to register node: %v", err)
+	}
+
+	// Start task executor (watches for assigned tasks and executes them)
+	executor := NewTaskExecutor(nodeID, zkClient, db)
+	go executor.Watch()
+
+	// Start retry watcher
 	scheduler := NewScheduler(zkClient, db)
 	go scheduler.Start()
 
@@ -52,11 +71,35 @@ func main() {
 		MaxAge:           12 * time.Hour,
 	}))
 
+	// Register API routes
 	RegisterRoutes(r, zkClient, db)
 
-	port := getEnv("PORT", "8080")
-	fmt.Printf("API Server starting on port %s\n", port)
-	if err := r.Run(":" + port); err != nil {
+	// Serve static frontend files
+	distPath := getEnv("FRONTEND_DIST", "./frontend-dist")
+	if info, err := os.Stat(distPath); err == nil && info.IsDir() {
+		// Serve static files from dist directory
+		r.Static("/assets", filepath.Join(distPath, "assets"))
+		r.StaticFile("/vite.svg", filepath.Join(distPath, "vite.svg"))
+
+		// SPA fallback: serve index.html for all non-API, non-asset routes
+		r.NoRoute(func(c *gin.Context) {
+			c.File(filepath.Join(distPath, "index.html"))
+		})
+
+		log.Printf("Serving frontend from: %s", distPath)
+	} else {
+		log.Printf("No frontend dist found at %s, API-only mode", distPath)
+		r.NoRoute(func(c *gin.Context) {
+			c.JSON(http.StatusNotFound, gin.H{
+				"error": "Not found. Frontend not available in this mode.",
+				"node":  nodeID,
+				"port":  port,
+			})
+		})
+	}
+
+	fmt.Printf("\n🚀 Node %s starting on 0.0.0.0:%s (IP: %s)\n", nodeID, port, localIP)
+	if err := r.Run("0.0.0.0:" + port); err != nil {
 		log.Fatalf("Failed to start server: %v", err)
 	}
 }

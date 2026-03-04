@@ -1364,3 +1364,74 @@ body {
     flex-direction: column;
   }
 }
+
+/* ===================== Node Role Badge ===================== */
+.node-role-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 10px;
+  border-radius: 20px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  margin-left: 8px;
+}
+
+.node-role-badge.role-master {
+  background: rgba(245, 158, 11, 0.12);
+  color: #f59e0b;
+  border: 1px solid rgba(245, 158, 11, 0.3);
+}
+
+.node-role-badge.role-slave {
+  background: rgba(139, 92, 246, 0.12);
+  color: #8b5cf6;
+  border: 1px solid rgba(139, 92, 246, 0.3);
+}
+
+/* ===================== Worker Inactive State ===================== */
+.worker-item.worker-inactive {
+  opacity: 0.5;
+  background: rgba(100, 100, 100, 0.05);
+  border-color: rgba(100, 100, 100, 0.15);
+}
+
+.inactive-badge {
+  color: var(--accent-red);
+  font-weight: 700;
+}
+
+/* ===================== Worker Action Buttons ===================== */
+.worker-actions {
+  display: flex;
+  gap: 4px;
+  margin-right: 4px;
+}
+
+.worker-action-btn {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  width: 24px;
+  height: 24px;
+  border-radius: 4px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  transition: all 0.2s;
+}
+
+.worker-action-btn.deactivate-btn:hover {
+  background: rgba(239, 68, 68, 0.15);
+  border-color: rgba(239, 68, 68, 0.3);
+  color: var(--accent-red);
+}
+
+.worker-action-btn.activate-btn:hover {
+  background: rgba(16, 185, 129, 0.15);
+  border-color: rgba(16, 185, 129, 0.3);
+  color: var(--accent-green);
+}

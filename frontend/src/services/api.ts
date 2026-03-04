@@ -1,7 +1,22 @@
 import axios from 'axios';
 
-const API_BASE = import.meta.env.VITE_API_URL || '/api';
-const WS_BASE = import.meta.env.VITE_WS_URL || `ws://${window.location.hostname}:8080`;
+// Determine API base URL from current window location
+// Each node serves both API and frontend on the same port
+const getApiBase = (): string => {
+  if (import.meta.env.VITE_API_URL) {
+    return import.meta.env.VITE_API_URL;
+  }
+  // When running behind a proxy (dev mode), use /api prefix
+  // When running on a node directly, use the same origin
+  const port = window.location.port;
+  const host = window.location.hostname;
+  if (port && ['8080', '8081', '8082', '8083', '8084'].includes(port)) {
+    return `http://${host}:${port}`;
+  }
+  return '/api';
+};
+
+const API_BASE = getApiBase();
 
 const api = axios.create({
   baseURL: API_BASE,
@@ -52,6 +67,28 @@ export interface LogEntry {
   created_at: string;
 }
 
+export interface NodeInfoData {
+  node_id: string;
+  role: 'master' | 'slave';
+  ip: string;
+  port: string;
+  status: string;
+  is_leader: boolean;
+}
+
+export interface ClusterNodeData {
+  node_id: string;
+  role: string;
+  ip: string;
+  port: string;
+  status: string;
+}
+
+export const fetchNodeInfo = async (): Promise<NodeInfoData> => {
+  const res = await api.get('/node-info');
+  return res.data;
+};
+
 export const fetchLeader = async (): Promise<{ leader: string }> => {
   const res = await api.get('/leader');
   return res.data;
@@ -92,8 +129,30 @@ export const fetchEvents = async (limit: number = 50): Promise<{ events: SystemE
   return res.data;
 };
 
+export const fetchClusterNodes = async (): Promise<{ nodes: ClusterNodeData[]; count: number }> => {
+  const res = await api.get('/nodes');
+  return res.data;
+};
+
+export const deactivateWorker = async (workerId: string): Promise<void> => {
+  await api.put(`/workers/${workerId}/deactivate`);
+};
+
+export const activateWorker = async (workerId: string): Promise<void> => {
+  await api.put(`/workers/${workerId}/activate`);
+};
+
+// WebSocket connection for real-time updates
 export const getWebSocketUrl = (): string => {
-  return `${WS_BASE}/ws`;
+  const port = window.location.port;
+  const host = window.location.hostname;
+  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  
+  if (port && ['8080', '8081', '8082', '8083', '8084'].includes(port)) {
+    return `${protocol}//${host}:${port}/ws`;
+  }
+  // Fallback for dev proxy
+  return `ws://${host}:8080/ws`;
 };
 
 export default api;

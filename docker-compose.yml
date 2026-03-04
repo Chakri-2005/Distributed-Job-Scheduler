@@ -37,19 +37,21 @@ services:
     networks:
       - scheduler-net
 
-  # ─── API Server ─────────────────────────────────────────────────
-  api-server:
+  # ─── Master Node (API + Worker + Frontend) ──────────────────────
+  node-master:
     build:
       context: ./api-server
       dockerfile: Dockerfile
-    container_name: api-server
+    container_name: node-master
     ports:
       - "8080:8080"
     environment:
+      NODE_ID: "master"
       PORT: "8080"
       ZK_HOST: "zookeeper:2181"
       DATABASE_URL: "host=postgres user=postgres password=postgres dbname=jobscheduler sslmode=disable"
       GIN_MODE: "release"
+      FRONTEND_DIST: "./frontend-dist"
     depends_on:
       zookeeper:
         condition: service_healthy
@@ -59,73 +61,98 @@ services:
     networks:
       - scheduler-net
 
-  # ─── Worker 1 ───────────────────────────────────────────────────
-  worker-1:
+  # ─── Slave 1 ────────────────────────────────────────────────────
+  node-slave1:
     build:
-      context: ./worker
+      context: ./api-server
       dockerfile: Dockerfile
-    container_name: worker-1
-    environment:
-      WORKER_ID: "worker-1"
-      ZK_HOST: "zookeeper:2181"
-      DATABASE_URL: "host=postgres user=postgres password=postgres dbname=jobscheduler sslmode=disable"
-    depends_on:
-      zookeeper:
-        condition: service_healthy
-      postgres:
-        condition: service_healthy
-    restart: unless-stopped
-    networks:
-      - scheduler-net
-
-  # ─── Worker 2 ───────────────────────────────────────────────────
-  worker-2:
-    build:
-      context: ./worker
-      dockerfile: Dockerfile
-    container_name: worker-2
-    environment:
-      WORKER_ID: "worker-2"
-      ZK_HOST: "zookeeper:2181"
-      DATABASE_URL: "host=postgres user=postgres password=postgres dbname=jobscheduler sslmode=disable"
-    depends_on:
-      zookeeper:
-        condition: service_healthy
-      postgres:
-        condition: service_healthy
-    restart: unless-stopped
-    networks:
-      - scheduler-net
-
-  # ─── Worker 3 ───────────────────────────────────────────────────
-  worker-3:
-    build:
-      context: ./worker
-      dockerfile: Dockerfile
-    container_name: worker-3
-    environment:
-      WORKER_ID: "worker-3"
-      ZK_HOST: "zookeeper:2181"
-      DATABASE_URL: "host=postgres user=postgres password=postgres dbname=jobscheduler sslmode=disable"
-    depends_on:
-      zookeeper:
-        condition: service_healthy
-      postgres:
-        condition: service_healthy
-    restart: unless-stopped
-    networks:
-      - scheduler-net
-
-  # ─── Frontend ───────────────────────────────────────────────────
-  frontend:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
-    container_name: frontend
+    container_name: node-slave1
     ports:
-      - "3000:80"
+      - "8081:8081"
+    environment:
+      NODE_ID: "slave1"
+      PORT: "8081"
+      ZK_HOST: "zookeeper:2181"
+      DATABASE_URL: "host=postgres user=postgres password=postgres dbname=jobscheduler sslmode=disable"
+      GIN_MODE: "release"
+      FRONTEND_DIST: "./frontend-dist"
     depends_on:
-      - api-server
+      zookeeper:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - scheduler-net
+
+  # ─── Slave 2 ────────────────────────────────────────────────────
+  node-slave2:
+    build:
+      context: ./api-server
+      dockerfile: Dockerfile
+    container_name: node-slave2
+    ports:
+      - "8082:8082"
+    environment:
+      NODE_ID: "slave2"
+      PORT: "8082"
+      ZK_HOST: "zookeeper:2181"
+      DATABASE_URL: "host=postgres user=postgres password=postgres dbname=jobscheduler sslmode=disable"
+      GIN_MODE: "release"
+      FRONTEND_DIST: "./frontend-dist"
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - scheduler-net
+
+  # ─── Slave 3 ────────────────────────────────────────────────────
+  node-slave3:
+    build:
+      context: ./api-server
+      dockerfile: Dockerfile
+    container_name: node-slave3
+    ports:
+      - "8083:8083"
+    environment:
+      NODE_ID: "slave3"
+      PORT: "8083"
+      ZK_HOST: "zookeeper:2181"
+      DATABASE_URL: "host=postgres user=postgres password=postgres dbname=jobscheduler sslmode=disable"
+      GIN_MODE: "release"
+      FRONTEND_DIST: "./frontend-dist"
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - scheduler-net
+
+  # ─── Slave 4 ────────────────────────────────────────────────────
+  node-slave4:
+    build:
+      context: ./api-server
+      dockerfile: Dockerfile
+    container_name: node-slave4
+    ports:
+      - "8084:8084"
+    environment:
+      NODE_ID: "slave4"
+      PORT: "8084"
+      ZK_HOST: "zookeeper:2181"
+      DATABASE_URL: "host=postgres user=postgres password=postgres dbname=jobscheduler sslmode=disable"
+      GIN_MODE: "release"
+      FRONTEND_DIST: "./frontend-dist"
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
     restart: unless-stopped
     networks:
       - scheduler-net
@@ -133,7 +160,6 @@ services:
 # ─── Volumes & Networks ─────────────────────────────────────────
 volumes:
   postgres-data:
-
 
 networks:
   scheduler-net:
