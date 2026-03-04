@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { fetchLeader, fetchWorkers, fetchTasks, fetchStats, fetchEvents, createTask } from './services/api';
-import type { Task, Worker, Stat, SystemEvent, TaskType } from './services/api';
+import type { Task, Worker, Stat, SystemEvent, TaskType, Priority } from './services/api';
 import Dashboard from './pages/Dashboard';
 import './App.css';
 
@@ -44,8 +44,8 @@ function App() {
     return () => clearInterval(interval);
   }, []);
 
-  const handleCreateTask = async (name: string, description: string, taskType: TaskType) => {
-    await createTask(name, description, taskType);
+  const handleCreateTask = async (name: string, description: string, taskType: TaskType, priority: Priority) => {
+    await createTask(name, description, taskType, priority);
     await fetchAll();
   };
 

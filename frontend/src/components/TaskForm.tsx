@@ -1,8 +1,8 @@
 import { useState } from 'react';
-import type { TaskType } from '../services/api';
+import type { TaskType, Priority } from '../services/api';
 
 interface TaskFormProps {
-    onSubmit: (name: string, description: string, taskType: TaskType) => Promise<void>;
+    onSubmit: (name: string, description: string, taskType: TaskType, priority: Priority) => Promise<void>;
 }
 
 const TASK_TYPES: { value: TaskType; label: string; icon: string; description: string }[] = [
@@ -15,6 +15,7 @@ export default function TaskForm({ onSubmit }: TaskFormProps) {
     const [name, setName] = useState('');
     const [description, setDescription] = useState('');
     const [taskType, setTaskType] = useState<TaskType>('batch_processing');
+    const [priority, setPriority] = useState<Priority>('medium');
     const [loading, setLoading] = useState(false);
     const [success, setSuccess] = useState(false);
     const [error, setError] = useState('');
@@ -28,7 +29,7 @@ export default function TaskForm({ onSubmit }: TaskFormProps) {
         setSuccess(false);
 
         try {
-            await onSubmit(name.trim(), description.trim(), taskType);
+            await onSubmit(name.trim(), description.trim(), taskType, priority);
             setName('');
             setDescription('');
             setSuccess(true);
@@ -40,13 +41,13 @@ export default function TaskForm({ onSubmit }: TaskFormProps) {
         }
     };
 
-    const quickTasks: { name: string; type: TaskType }[] = [
-        { name: 'Process CSV Data', type: 'batch_processing' },
-        { name: 'Send Weekly Report', type: 'email_notification' },
-        { name: 'Train Classifier', type: 'ai_job' },
-        { name: 'Backup Database', type: 'batch_processing' },
-        { name: 'Alert Admins', type: 'email_notification' },
-        { name: 'Run Inference', type: 'ai_job' },
+    const quickTasks: { name: string; type: TaskType; priority: Priority }[] = [
+        { name: 'Process CSV Data', type: 'batch_processing', priority: 'medium' },
+        { name: 'Send Weekly Report', type: 'email_notification', priority: 'low' },
+        { name: 'Train Classifier', type: 'ai_job', priority: 'high' },
+        { name: 'Backup Database', type: 'batch_processing', priority: 'high' },
+        { name: 'Alert Admins', type: 'email_notification', priority: 'high' },
+        { name: 'Run Inference', type: 'ai_job', priority: 'medium' },
     ];
 
     return (
@@ -70,6 +71,23 @@ export default function TaskForm({ onSubmit }: TaskFormProps) {
                             >
                                 <span className="type-icon">{tt.icon}</span>
                                 <span className="type-label">{tt.label}</span>
+                            </button>
+                        ))}
+                    </div>
+                </div>
+
+                <div className="form-group">
+                    <label className="form-label">Priority</label>
+                    <div className="priority-selector">
+                        {([['high', '🔴', 'High'], ['medium', '🟡', 'Medium'], ['low', '🟢', 'Low']] as const).map(([val, icon, label]) => (
+                            <button
+                                key={val}
+                                type="button"
+                                className={`priority-option priority-${val} ${priority === val ? 'active' : ''}`}
+                                onClick={() => setPriority(val)}
+                                disabled={loading}
+                            >
+                                {icon} {label}
                             </button>
                         ))}
                     </div>
@@ -107,7 +125,7 @@ export default function TaskForm({ onSubmit }: TaskFormProps) {
                             key={qt.name}
                             type="button"
                             className={`quick-btn ${qt.type === 'email_notification' ? 'quick-email' : qt.type === 'ai_job' ? 'quick-ai' : ''}`}
-                            onClick={() => { setName(qt.name); setTaskType(qt.type); }}
+                            onClick={() => { setName(qt.name); setTaskType(qt.type); setPriority(qt.priority); }}
                             disabled={loading}
                         >
                             {qt.type === 'batch_processing' ? '📦' : qt.type === 'email_notification' ? '📧' : '🤖'} {qt.name}

@@ -1,6 +1,7 @@
 import axios from 'axios';
 
 const API_BASE = import.meta.env.VITE_API_URL || '/api';
+const WS_BASE = import.meta.env.VITE_WS_URL || `ws://${window.location.hostname}:8080`;
 
 const api = axios.create({
   baseURL: API_BASE,
@@ -8,12 +9,14 @@ const api = axios.create({
 });
 
 export type TaskType = 'batch_processing' | 'email_notification' | 'ai_job';
+export type Priority = 'high' | 'medium' | 'low';
 
 export interface Task {
   id: number;
   name: string;
   description: string;
   task_type: TaskType;
+  priority: Priority;
   status: 'pending' | 'running' | 'completed' | 'failed';
   assigned_worker: string;
   retry_count: number;
@@ -64,8 +67,8 @@ export const fetchTasks = async (): Promise<{ tasks: Task[]; count: number }> =>
   return res.data;
 };
 
-export const createTask = async (name: string, description: string, taskType: TaskType = 'batch_processing'): Promise<{ task: Task }> => {
-  const res = await api.post('/tasks', { name, description, task_type: taskType });
+export const createTask = async (name: string, description: string, taskType: TaskType = 'batch_processing', priority: Priority = 'medium'): Promise<{ task: Task }> => {
+  const res = await api.post('/tasks', { name, description, task_type: taskType, priority });
   return res.data;
 };
 
@@ -87,6 +90,10 @@ export const fetchLogs = async (taskId: number): Promise<{ logs: LogEntry[] }> =
 export const fetchEvents = async (limit: number = 50): Promise<{ events: SystemEvent[]; count: number }> => {
   const res = await api.get(`/events?limit=${limit}`);
   return res.data;
+};
+
+export const getWebSocketUrl = (): string => {
+  return `${WS_BASE}/ws`;
 };
 
 export default api;

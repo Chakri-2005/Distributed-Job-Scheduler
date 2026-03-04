@@ -72,6 +72,7 @@ func RegisterRoutes(r *gin.Engine, zkClient *ZKClient, db *sql.DB) {
 			Name        string `json:"name" binding:"required"`
 			Description string `json:"description"`
 			TaskType    string `json:"task_type"`
+			Priority    string `json:"priority"`
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -92,7 +93,21 @@ func RegisterRoutes(r *gin.Engine, zkClient *ZKClient, db *sql.DB) {
 			return
 		}
 
-		task, err := CreateTask(db, req.Name, req.Description, req.TaskType)
+		// Validate priority
+		validPriorities := map[string]bool{
+			"high":   true,
+			"medium": true,
+			"low":    true,
+		}
+		if req.Priority == "" {
+			req.Priority = "medium"
+		}
+		if !validPriorities[req.Priority] {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid priority. Must be: high, medium, or low"})
+			return
+		}
+
+		task, err := CreateTask(db, req.Name, req.Description, req.TaskType, req.Priority)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
@@ -109,7 +124,7 @@ func RegisterRoutes(r *gin.Engine, zkClient *ZKClient, db *sql.DB) {
 		}
 
 		// Log event
-		CreateEvent(db, "task_created", "api-server", "Task '"+task.Name+"' created (type: "+task.TaskType+")")
+		CreateEvent(db, "task_created", "api-server", "Task '"+task.Name+"' created (type: "+task.TaskType+", priority: "+task.Priority+")")
 
 		c.JSON(http.StatusCreated, gin.H{"task": task})
 	})

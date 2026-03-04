@@ -107,6 +107,7 @@ export default function TaskList({ tasks }: TaskListProps) {
                             <th>ID</th>
                             <th>Type</th>
                             <th>Name</th>
+                            <th>Priority</th>
                             <th>Status</th>
                             <th>Worker</th>
                             <th>Retries</th>
@@ -118,7 +119,7 @@ export default function TaskList({ tasks }: TaskListProps) {
                     <tbody>
                         {filtered.length === 0 ? (
                             <tr>
-                                <td colSpan={9} className="empty-row">
+                                <td colSpan={10} className="empty-row">
                                     {filter === 'all' ? 'No tasks yet — create one!' : `No ${filter} tasks`}
                                 </td>
                             </tr>
@@ -137,6 +138,11 @@ export default function TaskList({ tasks }: TaskListProps) {
                                             {task.description && (
                                                 <div className="task-desc">{task.description}</div>
                                             )}
+                                        </td>
+                                        <td>
+                                            <span className={`priority-badge priority-${task.priority || 'medium'}`}>
+                                                {task.priority === 'high' ? '🔴' : task.priority === 'low' ? '🟢' : '🟡'} {task.priority || 'medium'}
+                                            </span>
                                         </td>
                                         <td>
                                             <span className={`status-badge ${STATUS_COLORS[task.status] || ''}`}>
@@ -167,7 +173,7 @@ export default function TaskList({ tasks }: TaskListProps) {
                                     </tr>
                                     {expandedTask === task.id && (
                                         <tr key={`logs-${task.id}`} className="logs-row">
-                                            <td colSpan={9}>
+                                            <td colSpan={10}>
                                                 <div className="logs-panel">
                                                     <div className="logs-header">
                                                         <span>📜 Execution Logs — Task #{task.id}</span>

@@ -14,7 +14,8 @@ type Task struct {
 	Name           string     `json:"name"`
 	Description    string     `json:"description"`
 	TaskType       string     `json:"task_type"`
-	Status         string     `json:"status"` // pending, running, completed, failed
+	Priority       string     `json:"priority"` // high, medium, low
+	Status         string     `json:"status"`   // pending, running, completed, failed
 	AssignedWorker string     `json:"assigned_worker,omitempty"`
 	RetryCount     int        `json:"retry_count"`
 	MaxRetries     int        `json:"max_retries"`
@@ -59,6 +60,7 @@ func RunMigrations(db *sql.DB) error {
 		name            VARCHAR(255) NOT NULL,
 		description     TEXT,
 		task_type       VARCHAR(50) NOT NULL DEFAULT 'batch_processing',
+		priority        VARCHAR(20) NOT NULL DEFAULT 'medium',
 		status          VARCHAR(50) NOT NULL DEFAULT 'pending',
 		assigned_worker VARCHAR(255),
 		retry_count     INTEGER NOT NULL DEFAULT 0,
@@ -93,6 +95,7 @@ func RunMigrations(db *sql.DB) error {
 	// Add columns if they don't exist (for existing databases)
 	alterStatements := []string{
 		`ALTER TABLE tasks ADD COLUMN IF NOT EXISTS task_type VARCHAR(50) NOT NULL DEFAULT 'batch_processing'`,
+		`ALTER TABLE tasks ADD COLUMN IF NOT EXISTS priority VARCHAR(20) NOT NULL DEFAULT 'medium'`,
 		`ALTER TABLE tasks ADD COLUMN IF NOT EXISTS retry_count INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE tasks ADD COLUMN IF NOT EXISTS max_retries INTEGER NOT NULL DEFAULT 3`,
 	}
@@ -105,24 +108,27 @@ func RunMigrations(db *sql.DB) error {
 }
 
 // CreateTask inserts a new task into the DB and returns it
-func CreateTask(db *sql.DB, name, description, taskType string) (*Task, error) {
+func CreateTask(db *sql.DB, name, description, taskType, priority string) (*Task, error) {
 	if taskType == "" {
 		taskType = "batch_processing"
 	}
+	if priority == "" {
+		priority = "medium"
+	}
 	var task Task
 	err := db.QueryRow(
-		`INSERT INTO tasks (name, description, task_type, status, created_at) VALUES ($1, $2, $3, 'pending', NOW()) RETURNING id, name, description, task_type, status, retry_count, max_retries, created_at`,
-		name, description, taskType,
-	).Scan(&task.ID, &task.Name, &task.Description, &task.TaskType, &task.Status, &task.RetryCount, &task.MaxRetries, &task.CreatedAt)
+		`INSERT INTO tasks (name, description, task_type, priority, status, created_at) VALUES ($1, $2, $3, $4, 'pending', NOW()) RETURNING id, name, description, task_type, priority, status, retry_count, max_retries, created_at`,
+		name, description, taskType, priority,
+	).Scan(&task.ID, &task.Name, &task.Description, &task.TaskType, &task.Priority, &task.Status, &task.RetryCount, &task.MaxRetries, &task.CreatedAt)
 	if err != nil {
 		return nil, err
 	}
 	return &task, nil
 }
 
-// GetAllTasks returns all tasks ordered by created_at desc
+// GetAllTasks returns all tasks ordered by priority then created_at desc
 func GetAllTasks(db *sql.DB) ([]Task, error) {
-	rows, err := db.Query(`SELECT id, name, description, task_type, status, COALESCE(assigned_worker,''), retry_count, max_retries, created_at, completed_at FROM tasks ORDER BY created_at DESC`)
+	rows, err := db.Query(`SELECT id, name, description, task_type, COALESCE(priority,'medium'), status, COALESCE(assigned_worker,''), retry_count, max_retries, created_at, completed_at FROM tasks ORDER BY CASE priority WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 2 END, created_at DESC`)
 	if err != nil {
 		return nil, err
 	}
@@ -132,7 +138,7 @@ func GetAllTasks(db *sql.DB) ([]Task, error) {
 	for rows.Next() {
 		var t Task
 		var assignedWorker string
-		if err := rows.Scan(&t.ID, &t.Name, &t.Description, &t.TaskType, &t.Status, &assignedWorker, &t.RetryCount, &t.MaxRetries, &t.CreatedAt, &t.CompletedAt); err != nil {
+		if err := rows.Scan(&t.ID, &t.Name, &t.Description, &t.TaskType, &t.Priority, &t.Status, &assignedWorker, &t.RetryCount, &t.MaxRetries, &t.CreatedAt, &t.CompletedAt); err != nil {
 			return nil, err
 		}
 		if assignedWorker != "" {

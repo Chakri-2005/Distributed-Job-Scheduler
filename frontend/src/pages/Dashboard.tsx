@@ -5,7 +5,7 @@ import TaskList from '../components/TaskList';
 import TaskForm from '../components/TaskForm';
 import StatsChart from '../components/StatsChart';
 import EventLog from '../components/EventLog';
-import type { TaskType } from '../services/api';
+import type { TaskType, Priority } from '../services/api';
 
 interface DashboardProps {
     leader: string;
@@ -16,7 +16,7 @@ interface DashboardProps {
     events: SystemEvent[];
     loading: boolean;
     error: string;
-    onCreateTask: (name: string, description: string, taskType: TaskType) => Promise<void>;
+    onCreateTask: (name: string, description: string, taskType: TaskType, priority: Priority) => Promise<void>;
     onRefresh: () => void;
 }
 
