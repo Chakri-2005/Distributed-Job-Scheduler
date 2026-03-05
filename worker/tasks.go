@@ -1,3 +1,8 @@
+/*
+This file defines the TaskWatcher struct which monitors ZooKeeper for task assignments.
+When a task is assigned to this worker's specific node queue, it executes the
+simulated logic (Batch, Email, AI) and reports success/failure back to PostgreSQL.
+*/
 package main
 
 import (
@@ -85,7 +90,10 @@ func (tw *TaskWatcher) watchAssignments(nodeID string) {
 	}
 }
 
-// executeTask simulates task execution based on task type
+// executeTask simulates task execution based on task type.
+// It retrieves the task payload, switches the DB status to 'running', sleeps
+// based on parameters to simulate work elapsed time, and deterministically
+// processes 10% simulated failure rates.
 func (tw *TaskWatcher) executeTask(nodeID, taskNode string) {
 	taskPath := fmt.Sprintf("/assignments/%s/%s", nodeID, taskNode)
 

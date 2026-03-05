@@ -1,3 +1,9 @@
+/*
+ * EventLog Component
+ * Renders a scrolling list of recent system events (e.g. leader elections,
+ * worker heartbeats, task completions) published from the Go backend.
+ * Provides real-time visibility into the distributed cluster's activity.
+ */
 import type { SystemEvent } from '../services/api';
 
 interface EventLogProps {

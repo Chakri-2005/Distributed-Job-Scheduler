@@ -1,3 +1,8 @@
+/*
+ * StatsChart Component
+ * Uses the 'recharts' library to render visual representations (Pie/Bar charts)
+ * of the current task distribution based on their execution status and type.
+ */
 import { PieChart, Pie, Cell, Legend, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip } from 'recharts';
 import type { Stat } from '../services/api';
 

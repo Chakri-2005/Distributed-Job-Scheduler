@@ -8,6 +8,12 @@ import type { Task, Worker, Stat, SystemEvent, TaskType, Priority, NodeInfoData 
 import Dashboard from './pages/Dashboard';
 import './App.css';
 
+/*
+ * App Component
+ * This is the root component of the frontend application.
+ * It manages global state, fetches data from the API server, and maintains
+ * a real-time WebSocket connection for live UI updates.
+ */
 function App() {
   const [leader, setLeader] = useState<string>('');
   const [workers, setWorkers] = useState<Worker[]>([]);

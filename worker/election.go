@@ -1,3 +1,8 @@
+/*
+This file defines the Elector struct, which manages the Leader Election process
+using ZooKeeper ephemeral sequential znodes. It determines if this specific
+worker node acts as the Master scheduler or a Follower worker.
+*/
 package main
 
 import (
@@ -28,7 +33,9 @@ func NewElector(workerID string, zkClient *ZKClient, db *sql.DB) *Elector {
 	}
 }
 
-// Register creates an ephemeral sequential znode under /workers and starts election
+// Register creates an ephemeral sequential znode under /workers and starts election.
+// Leader Election: By using zk.FlagEphemeral|zk.FlagSequence, ZooKeeper automatically
+// appends an incrementing number to the znode. The node with the lowest sequence wins.
 func (e *Elector) Register() error {
 	// Ensure /workers exists
 	e.zkClient.EnsureBaseNodes()
@@ -91,7 +98,9 @@ func (e *Elector) runElection() {
 }
 
 // tryBecomeLeader checks if this worker has the smallest sequence number
-// Uses chain-watch: watches the predecessor node, not the minimum node
+// Leader Election (Chain-Watch): It watches the predecessor node (the node with
+// the next smallest sequence number) rather than the minimum node to prevent
+// the "herd effect" upon leader failure.
 func (e *Elector) tryBecomeLeader() (bool, <-chan zk.Event, error) {
 	children, _, err := e.zkClient.conn.Children("/workers")
 	if err != nil {

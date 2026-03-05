@@ -1,3 +1,8 @@
+/*
+Package main implements the standalone Worker Node for the Distributed Job Scheduler.
+This executable connects to ZooKeeper to participate in leader election, and
+polls its assignment queue to simulate processing of distributed tasks.
+*/
 package main
 
 import (
@@ -7,6 +12,9 @@ import (
 	"time"
 )
 
+// main is the entry point for the standalone worker process.
+// It initializes database and ZooKeeper connections, registers the node for election,
+// and spawns the background task watcher.
 func main() {
 	workerID := os.Getenv("WORKER_ID")
 	if workerID == "" {

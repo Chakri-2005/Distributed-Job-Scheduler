@@ -1,3 +1,8 @@
+/*
+This file defines the Scheduler component, which is responsible for polling ZooKeeper
+to find pending tasks, assigning them to the least-loaded active worker, and scanning
+the database to re-queue failed tasks that have retries remaining.
+*/
 package main
 
 import (
@@ -34,7 +39,10 @@ func (s *Scheduler) Start() {
 	}
 }
 
-// watchAndAssignTasks checks if we are leader and assigns pending tasks
+// watchAndAssignTasks checks if we are leader and assigns pending tasks.
+// It retrieves the list of pending tasks from ZooKeeper (/tasks), verifies
+// their status in the database, and uses a round-robin / least-loaded hybrid
+// allocation to match them to connected workers.
 func (s *Scheduler) watchAndAssignTasks() {
 	leader, err := s.zk.GetLeader()
 	if err != nil || leader == "" {
@@ -120,7 +128,10 @@ func (s *Scheduler) watchAndAssignTasks() {
 	}
 }
 
-// retryFailedTasks checks for failed tasks that can be retried
+// retryFailedTasks checks for failed tasks that can be retried.
+// It queries the database for tasks marked as 'failed' that haven't exhausted
+// their max_retries limit, increments their retry_count, resets their status
+// to 'pending', and explicitly recreates their /tasks znode in ZooKeeper.
 func (s *Scheduler) retryFailedTasks() {
 	rows, err := s.db.Query(`SELECT id, name, retry_count, max_retries FROM tasks WHERE status='failed' AND retry_count < max_retries`)
 	if err != nil {

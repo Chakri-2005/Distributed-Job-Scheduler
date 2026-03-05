@@ -1,3 +1,9 @@
+/*
+Package main is the entry point for the distributed job scheduler backend.
+It initializes the ZooKeeper client, PostgreSQL database connection, sets up
+the REST API using Gin, and launches background processes for leader election,
+task execution, and heartbeat monitoring.
+*/
 package main
 
 import (
@@ -12,6 +18,9 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// main serves as the primary entry point for each cluster node.
+// It parses environment variables and orchestrates the setup of database,
+// ZooKeeper, WebSockets, and the HTTP server.
 func main() {
 	nodeID := getEnv("NODE_ID", "master")
 	port := getEnv("PORT", "8080")

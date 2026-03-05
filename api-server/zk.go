@@ -1,3 +1,8 @@
+/*
+This file handles ZooKeeper interactions and connection management.
+It contains helper functions to read and write node data, perform leader election operations,
+write heartbeat timestamps, and manage ephemeral worker znodes.
+*/
 package main
 
 import (
@@ -139,6 +144,9 @@ func (z *ZKClient) WatchLeader(callback func(leader string)) {
 }
 
 // WriteHeartbeat writes a heartbeat timestamp for a node
+// Heartbeat Failure Detection:
+// This function updates an ephemeral heartbeat znode with the current Unix timestamp
+// to prove this node is alive and responding.
 func (z *ZKClient) WriteHeartbeat(nodeID string) {
 	hbPath := "/heartbeats/" + nodeID
 	ts := []byte(fmt.Sprintf("%d", time.Now().UnixMilli()))
@@ -173,6 +181,9 @@ func (z *ZKClient) GetHeartbeats() map[string]int64 {
 }
 
 // AddDynamicWorkerZNode creates a new ephemeral sequential worker znode
+// Leader Election related:
+// The sequential nature assigns an incrementing number, and the lowest sequence
+// can be used as the cluster leader during an election process.
 func (z *ZKClient) AddDynamicWorkerZNode(workerID string) (string, error) {
 	nodePath := fmt.Sprintf("/workers/%s_", workerID)
 	created, err := z.conn.Create(nodePath, []byte(workerID), zk.FlagEphemeral|zk.FlagSequence, zk.WorldACL(zk.PermAll))

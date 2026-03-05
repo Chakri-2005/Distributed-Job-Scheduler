@@ -1,3 +1,9 @@
+/*
+ * TaskForm Component
+ * Renders the form interface allowing users to create new jobs.
+ * Users can specify the task name, description, exact type (batch, email, AI),
+ * and prioritization. Also includes one-click "Quick Tasks" shortcuts.
+ */
 import { useState } from 'react';
 import type { TaskType, Priority } from '../services/api';
 

@@ -1,3 +1,8 @@
+/*
+This file defines the REST API endpoints and routes using the Gin framework.
+It exposes HTTP endpoints for retrieving cluster status, workers, tasks, snapshot data,
+and performing administrative tasks like deleting tasks or adding workers.
+*/
 package main
 
 import (
@@ -11,7 +16,9 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// RegisterRoutes sets up all REST API routes
+// RegisterRoutes sets up all REST API routes for the backend service.
+// Each endpoint interacts either directly with ZooKeeper (for cluster state)
+// or PostgreSQL (for task and event persistence).
 func RegisterRoutes(r *gin.Engine, zkClient *ZKClient, db *sql.DB) {
 	r.GET("/health", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})

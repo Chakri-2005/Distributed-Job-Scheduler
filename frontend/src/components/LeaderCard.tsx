@@ -1,3 +1,8 @@
+/*
+ * LeaderCard Component
+ * Displays the currently elected Master node among the active workers.
+ * Utilizes data derived from the ZooKeeper ephemeral sequential election process.
+ */
 import type { Worker } from '../services/api';
 
 interface LeaderCardProps {

@@ -30,6 +30,12 @@ interface DashboardProps {
     onDeleteAllTasks: () => Promise<void>;
 }
 
+/*
+ * Dashboard Component
+ * The main layout container for the application UI.
+ * Orchestrates all child components (WorkerList, TaskList, etc.) and
+ * provides the snapshot viewing interface for the master node.
+ */
 export default function Dashboard({
     leader, workers, tasks, stats, typeStats, events, loading, error,
     nodeInfo, isMaster, onCreateTask, onRefresh,
@@ -45,6 +51,10 @@ export default function Dashboard({
     const [snapshotLoading, setSnapshotLoading] = useState(false);
     const [showSnapshot, setShowSnapshot] = useState(false);
 
+    // handleShowSnapshot fetches and displays the distributed snapshot
+    // Chandy-Lamport Distributed Snapshot:
+    // When the master requests a snapshot, it queries the cluster state to form a consistent picture
+    // of active workers, task counts, and completion statuses across nodes.
     const handleShowSnapshot = async () => {
         setSnapshotLoading(true);
         setShowSnapshot(true);

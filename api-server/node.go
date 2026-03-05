@@ -1,3 +1,9 @@
+/*
+Package main implements the distributed job scheduler backend.
+This file (node.go) contains the core communication, coordination, and distributed algorithms
+logic for each node in the cluster, including leader election, heartbeat detection,
+task scheduling, and mutual exclusion.
+*/
 package main
 
 import (
@@ -37,6 +43,9 @@ type ClusterNode struct {
 }
 
 // MutualExclusionState implements simplified Ricart-Agrawala
+// Ricart-Agrawala Mutual Exclusion Algorithm
+// Ensures that only one node can enter the critical section
+// when performing cluster state modifications (like adding/removing workers or deleting tasks).
 type MutualExclusionState struct {
 	mu           sync.Mutex
 	inCS         bool
@@ -119,6 +128,10 @@ func (cn *ClusterNode) ensureNode(path string) {
 }
 
 // Register registers this node in ZooKeeper and starts leader election
+// Leader Election:
+// Each node registers an ephemeral sequential znode in ZooKeeper under /workers.
+// The node with the smallest sequence number becomes the cluster leader.
+// The ephemeral nature ensures automatic cleanup if the node disconnects.
 func (cn *ClusterNode) Register() error {
 	// Ensure base znodes exist
 	cn.ensureNode("/nodes")
@@ -205,6 +218,9 @@ func (cn *ClusterNode) runElection() {
 }
 
 // startHeartbeat periodically writes a heartbeat to ZK
+// Heartbeat Failure Detection
+// Workers periodically send heartbeat signals to indicate they are alive.
+// These signals are written to ZooKeeper.
 func (cn *ClusterNode) startHeartbeat() {
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
@@ -214,6 +230,9 @@ func (cn *ClusterNode) startHeartbeat() {
 }
 
 // watchHeartbeats watches all workers' heartbeats and marks failures (master only)
+// Heartbeat Failure Detection
+// If a heartbeat timeout occurs (e.g., > 15 seconds), the master considers the worker failed,
+// marks it as inactive, and triggers re-assignment of its running tasks.
 func (cn *ClusterNode) watchHeartbeats() {
 	log.Printf("Master %s: starting heartbeat watcher...", cn.NodeID)
 	ticker := time.NewTicker(10 * time.Second)
@@ -354,6 +373,8 @@ func (cn *ClusterNode) watchAndAssignTasks(leaderNodeName string) {
 }
 
 // assignTask assigns a single task to a worker using hybrid scheduling
+// This function distributes tasks to available active workers.
+// It retrieves the task, finds available workers, and uses pickWorkerHybrid.
 func (cn *ClusterNode) assignTask(taskNode, leaderNodeName string, roundRobinIdx *int) {
 	taskPath := "/tasks/" + taskNode
 
@@ -450,6 +471,9 @@ func (cn *ClusterNode) filterActiveWorkers(workers []string) []string {
 }
 
 // pickWorkerHybrid uses least-loaded + round-robin fallback
+// Hybrid Task Scheduling Algorithm
+// It selects the worker with the minimum number of currently assigned tasks (least-loaded).
+// If multiple workers have the same minimum load, it uses round-robin as a fallback.
 func (cn *ClusterNode) pickWorkerHybrid(workers []string, roundRobinIdx *int) string {
 	type workerLoad struct {
 		name  string
@@ -699,6 +723,9 @@ func RemoveDynamicWorker(zkClient *ZKClient, db *sql.DB, workerID string) error 
 }
 
 // GetClusterSnapshot builds a Chandy-Lamport style cluster snapshot
+// Chandy-Lamport Distributed Snapshot
+// Captures a consistent snapshot of the entire distributed system (e.g., leader status,
+// active worker count, task statuses, and completion stats) without stopping ongoing task execution.
 func GetClusterSnapshot(zkClient *ZKClient, db *sql.DB) map[string]interface{} {
 	leader, _ := zkClient.GetLeader()
 	workers, _ := zkClient.GetWorkers()

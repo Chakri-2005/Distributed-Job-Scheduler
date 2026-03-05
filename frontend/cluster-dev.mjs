@@ -1,3 +1,10 @@
+/*
+ * Local Development Cluster Script
+ * This script automates the full deployment of the Distributed Job Scheduler.
+ * It checks for required Docker services (Zookeeper, PostgreSQL), compiles the
+ * Go API server, builds the React frontend, and concurrently spins up 5 nodes
+ * (1 Master, 4 Slaves) natively on the host machine using dynamic IP bindings.
+ */
 import { execSync, spawn } from 'child_process';
 import { networkInterfaces } from 'os';
 import { existsSync } from 'fs';

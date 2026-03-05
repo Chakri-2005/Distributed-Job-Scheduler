@@ -1,3 +1,9 @@
+/*
+ * TaskList Component
+ * Displays a sortable/filterable data table of all system tasks.
+ * Includes features to view individual execution logs pulled from Postgres,
+ * and allows Master nodes to delete single tasks or wipe the entire queue.
+ */
 import { useState } from 'react';
 import type { Task, LogEntry } from '../services/api';
 import { fetchLogs } from '../services/api';

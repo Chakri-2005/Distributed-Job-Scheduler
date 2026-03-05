@@ -1,3 +1,9 @@
+/*
+ * Cluster Start Helper Script
+ * Similar to the frontend development script, this orchestrator starts the
+ * distributed environment from the root directory, ensuring PostgreSQL and
+ * ZooKeeper are heavily verified before launching the Go binary nodes.
+ */
 import { execSync, spawn } from 'child_process';
 import { networkInterfaces } from 'os';
 import { existsSync } from 'fs';

@@ -1,3 +1,9 @@
+/*
+ * WorkerList Component
+ * Renders a grid of all registered workers dynamically populated from ZooKeeper.
+ * Includes visual heartbeat indicators and exposes administrative tools to the
+ * Master node (add worker, remove worker, deactivate).
+ */
 import type { Worker } from '../services/api';
 
 interface WorkerListProps {
@@ -18,12 +24,6 @@ function getBaseId(fullId: string): string {
     }
     return fullId;
 }
-
-// Convert internal worker node IDs to user-friendly "Worker N" labels
-function getDisplayName(_workers: Worker[], index: number): string {
-    return `Worker ${index + 1}`;
-}
-
 
 export default function WorkerList({ workers, leader, isMaster, onDeactivate, onActivate, onAddWorker, onRemoveWorker }: WorkerListProps) {
     return (
@@ -50,7 +50,7 @@ export default function WorkerList({ workers, leader, isMaster, onDeactivate, on
                 ) : (
                     workers.map((worker, index) => {
                         const baseId = getBaseId(worker.id);
-                        const displayName = getDisplayName(workers, index);
+                        const displayName = `Worker ${index + 1}`;
                         const isLeader = worker.id === leader;
                         const isAlive = worker.heartbeat === 'alive';
                         const isFailed = worker.heartbeat === 'failed';
@@ -58,7 +58,12 @@ export default function WorkerList({ workers, leader, isMaster, onDeactivate, on
                         return (
                             <div
                                 key={worker.id}
-                                className={`worker-item ${isLeader ? 'worker-leader' : ''} ${worker.status === 'inactive' ? 'worker-inactive' : ''} ${isFailed ? 'worker-failed' : ''}`}
+                                className={[
+                                    'worker-item',
+                                    isLeader ? 'worker-leader' : '',
+                                    worker.status === 'inactive' ? 'worker-inactive' : '',
+                                    isFailed ? 'worker-failed' : '',
+                                ].join(' ')}
                             >
                                 <div className="worker-avatar">
                                     {isLeader ? '👑' : '⚙️'}
@@ -78,6 +83,7 @@ export default function WorkerList({ workers, leader, isMaster, onDeactivate, on
                                     </div>
                                 </div>
                                 <div className="worker-actions">
+                                    {/* Deactivate / Activate — only for non-leader workers */}
                                     {isMaster && !isLeader && (
                                         <>
                                             {worker.status === 'active' ? (
@@ -93,12 +99,17 @@ export default function WorkerList({ workers, leader, isMaster, onDeactivate, on
                                                     title="Activate worker"
                                                 >▶</button>
                                             )}
-                                            <button
-                                                className="worker-action-btn remove-btn"
-                                                onClick={() => onRemoveWorker(baseId)}
-                                                title="Remove worker from cluster"
-                                            >🗑</button>
                                         </>
+                                    )}
+                                    {/* Remove — shown for ALL workers including leader (triggers re-election) */}
+                                    {isMaster && (
+                                        <button
+                                            className={`worker-action-btn remove-btn ${isLeader ? 'remove-leader-btn' : ''}`}
+                                            onClick={() => onRemoveWorker(baseId)}
+                                            title={isLeader
+                                                ? '⚠️ Remove leader — next worker will be elected as new leader'
+                                                : 'Remove worker from cluster'}
+                                        >🗑</button>
                                     )}
                                 </div>
                                 <div className={`worker-status-dot ${worker.status === 'active' ? 'active' : 'inactive'}`}></div>

@@ -1,3 +1,7 @@
+/*
+This file encapsulates the ZooKeeper and PostgreSQL connection clients for
+the standalone Worker binaries, abstracting away retry logic and base node creation.
+*/
 package main
 
 import (

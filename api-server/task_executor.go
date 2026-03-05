@@ -1,3 +1,9 @@
+/*
+This file defines the TaskExecutor, which represents the worker logic for a node.
+It continuously watches its specific ZooKeeper assignments directory for new tasks,
+executes them by simulating work (e.g., AI modeling, batch processing),
+and logs the execution trace directly into the shared PostgreSQL database.
+*/
 package main
 
 import (
@@ -29,7 +35,8 @@ func NewTaskExecutor(nodeID string, zkClient *ZKClient, db *sql.DB) *TaskExecuto
 	}
 }
 
-// Watch continuously watches for task assignments and executes them
+// Watch continuously watches for task assignments and executes them.
+// It resolves the node's specific ephemeral znode name and sets up a ZooKeeper watch.
 func (te *TaskExecutor) Watch() {
 	for {
 		myNodeName := te.getMyNodeName()
@@ -54,7 +61,9 @@ func (te *TaskExecutor) getMyNodeName() string {
 	return ""
 }
 
-// watchAssignments watches /assignments/<nodeID>/ for new tasks
+// watchAssignments watches /assignments/<nodeID>/ for new tasks.
+// Upon detecting a new child node (a new task assignment), it spawns a goroutine
+// to execute the task concurrently.
 func (te *TaskExecutor) watchAssignments(nodeID string) {
 	assignPath := fmt.Sprintf("/assignments/%s", nodeID)
 
@@ -81,7 +90,10 @@ func (te *TaskExecutor) watchAssignments(nodeID string) {
 	}
 }
 
-// executeTask simulates task execution based on task type
+// executeTask simulates task execution based on task type.
+// It retrieves the task payload, updates the DB status to 'running',
+// delegates to a specific mock runner (AI, Batch, or Email), and handles
+// success/failure database updates and WebSocket broadcasting upon completion.
 func (te *TaskExecutor) executeTask(nodeID, taskNode string) {
 	taskPath := fmt.Sprintf("/assignments/%s/%s", nodeID, taskNode)
 

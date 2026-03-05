@@ -1442,6 +1442,19 @@ body {
   color: var(--accent-red);
 }
 
+/* Leader remove button — amber warning color to signal re-election */
+.worker-action-btn.remove-leader-btn {
+  border-color: rgba(245, 158, 11, 0.35);
+  color: var(--accent-amber);
+}
+
+.worker-action-btn.remove-leader-btn:hover {
+  background: rgba(245, 158, 11, 0.2);
+  border-color: rgba(245, 158, 11, 0.5);
+  color: var(--accent-amber);
+}
+
+
 /* ===================== Worker Sub Label ===================== */
 .worker-sub {
   font-family: 'JetBrains Mono', monospace;
@@ -1624,8 +1637,15 @@ body {
 }
 
 @keyframes slideUp {
-  from { transform: translateY(20px); opacity: 0; }
-  to   { transform: translateY(0);    opacity: 1; }
+  from {
+    transform: translateY(20px);
+    opacity: 0;
+  }
+
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
 }
 
 .modal-header {

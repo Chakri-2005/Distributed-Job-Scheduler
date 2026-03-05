@@ -1,3 +1,9 @@
+/*
+ * API Service Module
+ * This file defines the TypeScript interfaces for all data models (Task, Worker, Event)
+ * and provides typed Axios wrapper functions to interact with the Go backend HTTP endpoints.
+ * It also intelligently resolves the correct WebSocket connection URL based on the current hostname.
+ */
 import axios from 'axios';
 
 // Determine API base URL from current window location

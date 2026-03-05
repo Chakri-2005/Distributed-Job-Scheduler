@@ -1,3 +1,8 @@
+/*
+This file manages real-time WebSocket communication for the cluster.
+It maintains a hub of connected frontend clients and broadcasts JSON-encoded events
+(task updates, worker status changes, heartbeat failures) instantly as they happen.
+*/
 package main
 
 import (
@@ -31,7 +36,9 @@ func NewWSHub() *WSHub {
 	}
 }
 
-// Run starts the hub's event loop
+// Run starts the hub's event loop.
+// It continuously listens on channels for new client connections, disconnections,
+// and incoming broadcast messages to fan-out to all active WebSocket clients.
 func (h *WSHub) Run() {
 	for {
 		select {
@@ -83,7 +90,9 @@ var upgrader = websocket.Upgrader{
 	WriteBufferSize: 1024,
 }
 
-// HandleWebSocket handles WebSocket connection upgrades
+// HandleWebSocket handles WebSocket connection upgrades from standard HTTP requests.
+// It initializes a ping/pong lifecycle to keep connections alive and registers
+// the new client into the central WSHub.
 func HandleWebSocket(c *gin.Context) {
 	conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
