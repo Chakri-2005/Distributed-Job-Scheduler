@@ -1,13 +1,10 @@
 import axios from 'axios';
 
 // Determine API base URL from current window location
-// Each node serves both API and frontend on the same port
 const getApiBase = (): string => {
   if (import.meta.env.VITE_API_URL) {
     return import.meta.env.VITE_API_URL;
   }
-  // When running behind a proxy (dev mode), use /api prefix
-  // When running on a node directly, use the same origin
   const port = window.location.port;
   const host = window.location.hostname;
   if (port && ['8080', '8081', '8082', '8083', '8084'].includes(port)) {
@@ -44,6 +41,7 @@ export interface Worker {
   id: string;
   is_leader: boolean;
   status: string;
+  heartbeat: string; // 'alive' | 'failed' | 'unknown'
 }
 
 export interface Stat {
@@ -84,6 +82,22 @@ export interface ClusterNodeData {
   status: string;
 }
 
+export interface WorkerStat {
+  id: string;
+  completed: number;
+  status: string;
+}
+
+export interface Snapshot {
+  leader: string;
+  active_workers: number;
+  running_tasks: number;
+  queued_tasks: number;
+  completed_tasks: number;
+  worker_stats: WorkerStat[];
+  snapshot_time: string;
+}
+
 export const fetchNodeInfo = async (): Promise<NodeInfoData> => {
   const res = await api.get('/node-info');
   return res.data;
@@ -107,6 +121,14 @@ export const fetchTasks = async (): Promise<{ tasks: Task[]; count: number }> =>
 export const createTask = async (name: string, description: string, taskType: TaskType = 'batch_processing', priority: Priority = 'medium'): Promise<{ task: Task }> => {
   const res = await api.post('/tasks', { name, description, task_type: taskType, priority });
   return res.data;
+};
+
+export const deleteTask = async (taskId: number): Promise<void> => {
+  await api.delete(`/tasks/${taskId}`);
+};
+
+export const deleteAllTasks = async (): Promise<void> => {
+  await api.delete('/tasks');
 };
 
 export const fetchStats = async (): Promise<{ stats: Stat[]; type_stats: Stat[] }> => {
@@ -142,16 +164,29 @@ export const activateWorker = async (workerId: string): Promise<void> => {
   await api.put(`/workers/${workerId}/activate`);
 };
 
+export const addWorker = async (): Promise<{ worker_id: string }> => {
+  const res = await api.post('/workers/add');
+  return res.data;
+};
+
+export const removeWorker = async (workerId: string): Promise<void> => {
+  await api.delete(`/workers/${workerId}`);
+};
+
+export const fetchSnapshot = async (): Promise<Snapshot> => {
+  const res = await api.get('/snapshot');
+  return res.data;
+};
+
 // WebSocket connection for real-time updates
 export const getWebSocketUrl = (): string => {
   const port = window.location.port;
   const host = window.location.hostname;
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  
+
   if (port && ['8080', '8081', '8082', '8083', '8084'].includes(port)) {
     return `${protocol}//${host}:${port}/ws`;
   }
-  // Fallback for dev proxy
   return `ws://${host}:8080/ws`;
 };
 

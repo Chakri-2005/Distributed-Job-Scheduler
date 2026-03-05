@@ -8,31 +8,50 @@ const EVENT_ICONS: Record<string, string> = {
     leader_elected: '👑',
     worker_joined: '🟢',
     worker_left: '🔴',
+    worker_added: '➕',
+    worker_removed: '🗑',
+    worker_activated: '▶️',
+    worker_deactivated: '⏸️',
     failover: '⚡',
     task_assigned: '📋',
     task_completed: '✅',
     task_failed: '❌',
     task_retried: '🔄',
     task_created: '➕',
+    task_deleted: '🗑',
+    heartbeat_failed: '💔',
+    snapshot_taken: '📸',
+    mutual_exclusion_request: '🔒',
+    mutual_exclusion_enter: '🔐',
+    mutual_exclusion_release: '🔓',
 };
 
 const EVENT_COLORS: Record<string, string> = {
     leader_elected: 'event-leader',
     worker_joined: 'event-join',
     worker_left: 'event-leave',
+    worker_added: 'event-join',
+    worker_removed: 'event-leave',
+    worker_activated: 'event-join',
+    worker_deactivated: 'event-leave',
     failover: 'event-failover',
     task_assigned: 'event-assign',
     task_completed: 'event-complete',
     task_failed: 'event-fail',
     task_retried: 'event-retry',
     task_created: 'event-create',
+    task_deleted: 'event-fail',
+    heartbeat_failed: 'event-failover',
+    snapshot_taken: 'event-assign',
+    mutual_exclusion_request: 'event-mutex',
+    mutual_exclusion_enter: 'event-mutex',
+    mutual_exclusion_release: 'event-mutex',
 };
 
 export default function EventLog({ events }: EventLogProps) {
     const formatTime = (iso: string) => {
         if (!iso) return '';
-        const d = new Date(iso);
-        return d.toLocaleTimeString();
+        return new Date(iso).toLocaleTimeString();
     };
 
     return (

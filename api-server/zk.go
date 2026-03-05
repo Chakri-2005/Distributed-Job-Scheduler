@@ -42,7 +42,7 @@ func (z *ZKClient) Close() {
 
 // EnsureZNodes creates the base ZooKeeper nodes if they don't exist
 func (z *ZKClient) EnsureZNodes() {
-	nodes := []string{"/workers", "/tasks", "/assignments", "/leader"}
+	nodes := []string{"/workers", "/tasks", "/assignments", "/leader", "/heartbeats", "/nodes"}
 	for _, node := range nodes {
 		exists, _, err := z.conn.Exists(node)
 		if err != nil {
@@ -88,6 +88,12 @@ func (z *ZKClient) CreateTaskZNode(taskID int) error {
 	return nil
 }
 
+// DeleteTaskZNode removes a task znode
+func (z *ZKClient) DeleteTaskZNode(taskID int) {
+	taskPath := fmt.Sprintf("/tasks/task_%d", taskID)
+	z.conn.Delete(taskPath, -1)
+}
+
 // GetTaskZNodes returns all task znodes
 func (z *ZKClient) GetTaskZNodes() ([]string, error) {
 	children, _, err := z.conn.Children("/tasks")
@@ -130,4 +136,54 @@ func (z *ZKClient) WatchLeader(callback func(leader string)) {
 			log.Println("Leader changed, re-watching...")
 		}
 	}()
+}
+
+// WriteHeartbeat writes a heartbeat timestamp for a node
+func (z *ZKClient) WriteHeartbeat(nodeID string) {
+	hbPath := "/heartbeats/" + nodeID
+	ts := []byte(fmt.Sprintf("%d", time.Now().UnixMilli()))
+	exists, stat, err := z.conn.Exists(hbPath)
+	if err != nil {
+		return
+	}
+	if exists {
+		z.conn.Set(hbPath, ts, stat.Version)
+	} else {
+		z.conn.Create(hbPath, ts, zk.FlagEphemeral, zk.WorldACL(zk.PermAll))
+	}
+}
+
+// GetHeartbeats returns a map of nodeID -> last heartbeat unix ms
+func (z *ZKClient) GetHeartbeats() map[string]int64 {
+	result := make(map[string]int64)
+	children, _, err := z.conn.Children("/heartbeats")
+	if err != nil {
+		return result
+	}
+	for _, child := range children {
+		data, _, err := z.conn.Get("/heartbeats/" + child)
+		if err != nil {
+			continue
+		}
+		var ts int64
+		fmt.Sscanf(string(data), "%d", &ts)
+		result[child] = ts
+	}
+	return result
+}
+
+// AddDynamicWorkerZNode creates a new ephemeral sequential worker znode
+func (z *ZKClient) AddDynamicWorkerZNode(workerID string) (string, error) {
+	nodePath := fmt.Sprintf("/workers/%s_", workerID)
+	created, err := z.conn.Create(nodePath, []byte(workerID), zk.FlagEphemeral|zk.FlagSequence, zk.WorldACL(zk.PermAll))
+	if err != nil {
+		return "", err
+	}
+	return created, nil
+}
+
+// DeleteWorkerZNode deletes a worker znode from /workers
+func (z *ZKClient) DeleteWorkerZNode(znodeName string) error {
+	znodePath := "/workers/" + znodeName
+	return z.conn.Delete(znodePath, -1)
 }

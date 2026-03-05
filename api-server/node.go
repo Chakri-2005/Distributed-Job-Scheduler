@@ -6,7 +6,8 @@ import (
 	"fmt"
 	"log"
 	"net"
-	"strings"
+	"strconv"
+	"sync"
 	"time"
 
 	"github.com/go-zookeeper/zk"
@@ -32,6 +33,59 @@ type ClusterNode struct {
 	MyZNode     string // Ephemeral sequential node path
 	IsLeader    bool
 	WorkerNodes []string
+	mutex       *MutualExclusionState
+}
+
+// MutualExclusionState implements simplified Ricart-Agrawala
+type MutualExclusionState struct {
+	mu           sync.Mutex
+	inCS         bool
+	timestamp    int64
+	requestQueue []chan struct{}
+}
+
+func newMutualExclusionState() *MutualExclusionState {
+	return &MutualExclusionState{}
+}
+
+// AcquireCS acquires the simulated critical section (simplified single-node variant for display purposes)
+func (m *MutualExclusionState) AcquireCS(reason, nodeID string, db *sql.DB) {
+	m.mu.Lock()
+	m.inCS = true
+	m.timestamp = time.Now().UnixMilli()
+	m.mu.Unlock()
+	CreateEvent(db, "mutual_exclusion_request",
+		nodeID, fmt.Sprintf("%s requesting critical section (clock: %d)", nodeID, m.timestamp))
+	CreateEvent(db, "mutual_exclusion_enter",
+		nodeID, fmt.Sprintf("%s entered critical section — %s", nodeID, reason))
+	if hub != nil {
+		msg, _ := json.Marshal(map[string]interface{}{
+			"type":      "mutual_exclusion",
+			"action":    "enter",
+			"node":      nodeID,
+			"reason":    reason,
+			"timestamp": m.timestamp,
+		})
+		hub.Broadcast(msg)
+	}
+}
+
+// ReleaseCS releases the critical section
+func (m *MutualExclusionState) ReleaseCS(reason, nodeID string, db *sql.DB) {
+	m.mu.Lock()
+	m.inCS = false
+	m.mu.Unlock()
+	CreateEvent(db, "mutual_exclusion_release",
+		nodeID, fmt.Sprintf("%s released critical section — %s", nodeID, reason))
+	if hub != nil {
+		msg, _ := json.Marshal(map[string]interface{}{
+			"type":   "mutual_exclusion",
+			"action": "release",
+			"node":   nodeID,
+			"reason": reason,
+		})
+		hub.Broadcast(msg)
+	}
 }
 
 var clusterNode *ClusterNode
@@ -49,6 +103,7 @@ func NewClusterNode(nodeID, port, ip string, zkClient *ZKClient, db *sql.DB) *Cl
 		Role:     role,
 		ZKClient: zkClient,
 		DB:       db,
+		mutex:    newMutualExclusionState(),
 	}
 }
 
@@ -65,11 +120,12 @@ func (cn *ClusterNode) ensureNode(path string) {
 
 // Register registers this node in ZooKeeper and starts leader election
 func (cn *ClusterNode) Register() error {
-	// Ensure /nodes exists
+	// Ensure base znodes exist
 	cn.ensureNode("/nodes")
 	cn.ensureNode("/workers")
 	cn.ensureNode("/tasks")
 	cn.ensureNode("/assignments")
+	cn.ensureNode("/heartbeats")
 
 	// Ensure /leader exists
 	exists, _, _ := cn.ZKClient.conn.Exists("/leader")
@@ -98,7 +154,10 @@ func (cn *ClusterNode) Register() error {
 	CreateEvent(cn.DB, "worker_joined", cn.NodeID,
 		fmt.Sprintf("Node %s joined cluster (port: %s)", cn.NodeID, cn.Port))
 
-	// Start leader election
+	// Start heartbeat
+	go cn.startHeartbeat()
+
+	// Start static role assignment and leader duties
 	go cn.runElection()
 
 	return nil
@@ -130,27 +189,104 @@ func (cn *ClusterNode) runElection() {
 		log.Printf("🏆 Node %s is statically assigned as MASTER!", cn.NodeID)
 		cn.IsLeader = true
 		cn.onBecomeLeader()
-
 		// Update node metadata
 		cn.registerNodeMetadata()
-
-		// Master runs its duties, block forever here
+		// Master watches heartbeats
+		go cn.watchHeartbeats()
+		// Master blocks forever
 		select {}
 	} else {
-		log.Printf("Node %s is statically assigned as a SLAVE, waiting for commands...", cn.NodeID)
+		log.Printf("Node %s is statically assigned as a SLAVE", cn.NodeID)
 		cn.IsLeader = false
 		cn.registerNodeMetadata()
-
-		// Slaves simply wait for commands, block forever here
+		// Slaves block forever
 		select {}
+	}
+}
+
+// startHeartbeat periodically writes a heartbeat to ZK
+func (cn *ClusterNode) startHeartbeat() {
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+	for range ticker.C {
+		cn.ZKClient.WriteHeartbeat(cn.NodeID)
+	}
+}
+
+// watchHeartbeats watches all workers' heartbeats and marks failures (master only)
+func (cn *ClusterNode) watchHeartbeats() {
+	log.Printf("Master %s: starting heartbeat watcher...", cn.NodeID)
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+	for range ticker.C {
+		heartbeats := cn.ZKClient.GetHeartbeats()
+		now := time.Now().UnixMilli()
+		workers, _, _ := cn.ZKClient.conn.Children("/workers")
+		for _, w := range workers {
+			workerBase := w
+			// strip sequence suffix
+			for i := len(w) - 1; i >= 0; i-- {
+				if w[i] == '_' {
+					workerBase = w[:i]
+					break
+				}
+			}
+			lastBeat, ok := heartbeats[workerBase]
+			if !ok {
+				continue
+			}
+			// If more than 15 seconds since last heartbeat, mark failed
+			if now-lastBeat > 15000 {
+				log.Printf("⚠️ Heartbeat failure detected for worker: %s", workerBase)
+				cn.handleHeartbeatFailure(workerBase)
+			}
+		}
+	}
+}
+
+// handleHeartbeatFailure marks the worker inactive and reassigns its tasks
+func (cn *ClusterNode) handleHeartbeatFailure(workerBase string) {
+	nodePath := fmt.Sprintf("/nodes/%s", workerBase)
+	data, _, err := cn.ZKClient.conn.Get(nodePath)
+	if err != nil {
+		return
+	}
+	var info NodeInfo
+	if json.Unmarshal(data, &info) != nil {
+		return
+	}
+	if info.Status == "inactive" {
+		return // Already marked
+	}
+	info.Status = "inactive"
+	newData, _ := json.Marshal(info)
+	_, stat, _ := cn.ZKClient.conn.Exists(nodePath)
+	cn.ZKClient.conn.Set(nodePath, newData, stat.Version)
+
+	CreateEvent(cn.DB, "heartbeat_failed", cn.NodeID,
+		fmt.Sprintf("Worker %s failed heartbeat — marked inactive, reassigning tasks", workerBase))
+
+	// Reassign running tasks to other workers
+	cn.DB.Exec(`UPDATE tasks SET status='pending', assigned_worker='' WHERE assigned_worker=$1 AND status='running'`, workerBase)
+	cn.DB.Exec(`DELETE FROM task_logs WHERE worker_id=$1 AND created_at > NOW() - INTERVAL '1 minute'`, workerBase)
+
+	if hub != nil {
+		msg, _ := json.Marshal(map[string]interface{}{
+			"type":   "heartbeat_failed",
+			"worker": workerBase,
+		})
+		hub.Broadcast(msg)
 	}
 }
 
 // onBecomeLeader is called when this node becomes the leader
 func (cn *ClusterNode) onBecomeLeader() {
 	myNodeName := cn.MyZNode
-	if idx := strings.LastIndex(myNodeName, "/"); idx >= 0 {
-		myNodeName = myNodeName[idx+1:]
+	for i := len(myNodeName) - 1; i >= 0; i-- {
+		if myNodeName[i] == '/' {
+			myNodeName = myNodeName[i+1:]
+			break
+		}
 	}
 
 	exists, stat, err := cn.ZKClient.conn.Exists("/leader")
@@ -286,12 +422,16 @@ func (cn *ClusterNode) assignTask(taskNode, leaderNodeName string, roundRobinIdx
 func (cn *ClusterNode) filterActiveWorkers(workers []string) []string {
 	var active []string
 	for _, w := range workers {
-		// Check if this worker's node is marked inactive
-		workerBase := strings.Split(w, "_")[0]
+		workerBase := w
+		for i := len(w) - 1; i >= 0; i-- {
+			if w[i] == '_' {
+				workerBase = w[:i]
+				break
+			}
+		}
 		nodePath := fmt.Sprintf("/nodes/%s", workerBase)
 		data, _, err := cn.ZKClient.conn.Get(nodePath)
 		if err != nil {
-			// Node exists in /workers but not in /nodes, assume active
 			active = append(active, w)
 			continue
 		}
@@ -465,6 +605,159 @@ func ActivateWorker(zkClient *ZKClient, db *sql.DB, workerID string) error {
 	return nil
 }
 
+// AddDynamicWorker adds a new ephemeral worker node to the cluster (master only)
+func AddDynamicWorker(zkClient *ZKClient, db *sql.DB, nodeIP string) (string, error) {
+	// Find next worker number
+	children, _, _ := zkClient.conn.Children("/workers")
+	newID := fmt.Sprintf("worker%d", len(children)+1)
+
+	// Create ephemeral sequential znode
+	znodePath, err := zkClient.AddDynamicWorkerZNode(newID)
+	if err != nil {
+		return "", fmt.Errorf("failed to create worker znode: %v", err)
+	}
+
+	// Extract just the node name from the full path
+	znodeName := znodePath
+	for i := len(znodePath) - 1; i >= 0; i-- {
+		if znodePath[i] == '/' {
+			znodeName = znodePath[i+1:]
+			break
+		}
+	}
+
+	// Register node metadata
+	nodePath := fmt.Sprintf("/nodes/%s", newID)
+	info := NodeInfo{
+		NodeID: newID,
+		Role:   "slave",
+		IP:     nodeIP,
+		Port:   "dynamic",
+		Status: "active",
+	}
+	data, _ := json.Marshal(info)
+	zkClient.conn.Create(nodePath, data, 0, zk.WorldACL(zk.PermAll))
+
+	CreateEvent(db, "worker_added", "master",
+		fmt.Sprintf("Dynamic worker %s added to cluster (znode: %s)", newID, znodeName))
+
+	if hub != nil {
+		msg, _ := json.Marshal(map[string]interface{}{
+			"type":   "worker_added",
+			"worker": newID,
+			"znode":  znodeName,
+		})
+		hub.Broadcast(msg)
+	}
+
+	return newID, nil
+}
+
+// RemoveDynamicWorker removes a worker from the cluster (master only)
+func RemoveDynamicWorker(zkClient *ZKClient, db *sql.DB, workerID string) error {
+	// Find the znode for this worker
+	children, _, err := zkClient.conn.Children("/workers")
+	if err != nil {
+		return err
+	}
+
+	var znodeName string
+	for _, child := range children {
+		// Match by prefix
+		if len(child) > len(workerID) && child[:len(workerID)] == workerID {
+			znodeName = child
+			break
+		}
+	}
+
+	if znodeName != "" {
+		zkClient.DeleteWorkerZNode(znodeName)
+	}
+
+	// Remove from /nodes
+	nodePath := fmt.Sprintf("/nodes/%s", workerID)
+	exists, stat, _ := zkClient.conn.Exists(nodePath)
+	if exists {
+		zkClient.conn.Delete(nodePath, stat.Version)
+	}
+
+	// Reassign running tasks
+	db.Exec(`UPDATE tasks SET status='pending', assigned_worker='' WHERE assigned_worker=$1 AND status='running'`, workerID)
+
+	CreateEvent(db, "worker_removed", "master",
+		fmt.Sprintf("Worker %s removed from cluster by master", workerID))
+
+	if hub != nil {
+		msg, _ := json.Marshal(map[string]interface{}{
+			"type":   "worker_removed",
+			"worker": workerID,
+		})
+		hub.Broadcast(msg)
+	}
+
+	return nil
+}
+
+// GetClusterSnapshot builds a Chandy-Lamport style cluster snapshot
+func GetClusterSnapshot(zkClient *ZKClient, db *sql.DB) map[string]interface{} {
+	leader, _ := zkClient.GetLeader()
+	workers, _ := zkClient.GetWorkers()
+	heartbeats := zkClient.GetHeartbeats()
+	now := time.Now().UnixMilli()
+
+	type WorkerStat struct {
+		ID        string `json:"id"`
+		Completed int    `json:"completed"`
+		Status    string `json:"status"`
+	}
+
+	activeCount := 0
+	workerStats := []WorkerStat{}
+	for _, w := range workers {
+		workerBase := w
+		for i := len(w) - 1; i >= 0; i-- {
+			if w[i] == '_' {
+				workerBase = w[:i]
+				break
+			}
+		}
+
+		// Check heartbeat status
+		status := "alive"
+		if lastBeat, ok := heartbeats[workerBase]; ok {
+			if now-lastBeat > 15000 {
+				status = "failed"
+			}
+		}
+
+		// Count completed tasks
+		var completed int
+		db.QueryRow(`SELECT COUNT(*) FROM tasks WHERE assigned_worker=$1 AND status='completed'`, workerBase).Scan(&completed)
+
+		workerStats = append(workerStats, WorkerStat{
+			ID:        workerBase,
+			Completed: completed,
+			Status:    status,
+		})
+		activeCount++
+	}
+
+	var running, queued, completed int
+	db.QueryRow(`SELECT COUNT(*) FROM tasks WHERE status='running'`).Scan(&running)
+	db.QueryRow(`SELECT COUNT(*) FROM tasks WHERE status='pending'`).Scan(&queued)
+	db.QueryRow(`SELECT COUNT(*) FROM tasks WHERE status='completed'`).Scan(&completed)
+
+	return map[string]interface{}{
+		"leader":          leader,
+		"active_workers":  activeCount,
+		"running_tasks":   running,
+		"queued_tasks":    queued,
+		"completed_tasks": completed,
+		"worker_stats":    workerStats,
+		"snapshot_time":   time.Now().Format(time.RFC3339),
+	}
+}
+
 // GetLocalIP returns the machine's local network IP (prefers the real outbound IP)
 func GetLocalIP() string {
 	// Best method: dial a public address to find which local IP the OS routes through
@@ -488,4 +781,9 @@ func GetLocalIP() string {
 		}
 	}
 	return "0.0.0.0"
+}
+
+// GetWorkerDisplayName converts internal node ID to user-friendly "Worker N" format
+func GetWorkerDisplayName(workerID string, index int) string {
+	return "Worker " + strconv.Itoa(index+1)
 }

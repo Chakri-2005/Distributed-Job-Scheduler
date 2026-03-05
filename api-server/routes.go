@@ -3,8 +3,10 @@ package main
 import (
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/gin-gonic/gin"
 )
@@ -15,7 +17,7 @@ func RegisterRoutes(r *gin.Engine, zkClient *ZKClient, db *sql.DB) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	})
 
-	// GET /node-info - returns this node's role and metadata
+	// GET /node-info
 	r.GET("/node-info", func(c *gin.Context) {
 		if clusterNode == nil {
 			c.JSON(http.StatusOK, gin.H{
@@ -37,7 +39,7 @@ func RegisterRoutes(r *gin.Engine, zkClient *ZKClient, db *sql.DB) {
 		})
 	})
 
-	// GET /leader - returns current leader node
+	// GET /leader
 	r.GET("/leader", func(c *gin.Context) {
 		leader, err := zkClient.GetLeader()
 		if err != nil {
@@ -47,7 +49,7 @@ func RegisterRoutes(r *gin.Engine, zkClient *ZKClient, db *sql.DB) {
 		c.JSON(http.StatusOK, gin.H{"leader": leader})
 	})
 
-	// GET /workers - returns list of active worker nodes from ZooKeeper
+	// GET /workers - returns workers with heartbeat status
 	r.GET("/workers", func(c *gin.Context) {
 		workers, err := zkClient.GetWorkers()
 		if err != nil {
@@ -59,47 +61,56 @@ func RegisterRoutes(r *gin.Engine, zkClient *ZKClient, db *sql.DB) {
 		}
 
 		leader, _ := zkClient.GetLeader()
+		heartbeats := zkClient.GetHeartbeats()
+		nowMs := time.Now().UnixMilli()
 
 		type WorkerInfo struct {
-			ID       string `json:"id"`
-			IsLeader bool   `json:"is_leader"`
-			Status   string `json:"status"`
+			ID        string `json:"id"`
+			IsLeader  bool   `json:"is_leader"`
+			Status    string `json:"status"`
+			Heartbeat string `json:"heartbeat"`
 		}
 
 		result := make([]WorkerInfo, 0, len(workers))
 		for _, w := range workers {
 			status := "active"
-			// Check node status from /nodes
 			workerBase := w
-			// Try to get the worker base name (before the _sequence)
-			if idx := len(w) - 1; idx > 0 {
-				for i := idx; i >= 0; i-- {
-					if w[i] == '_' {
-						workerBase = w[:i]
-						break
-					}
+			for i := len(w) - 1; i >= 0; i-- {
+				if w[i] == '_' {
+					workerBase = w[:i]
+					break
 				}
 			}
 			nodePath := "/nodes/" + workerBase
-			data, _, err := zkClient.conn.Get(nodePath)
-			if err == nil {
+			data, _, readErr := zkClient.conn.Get(nodePath)
+			if readErr == nil {
 				var info NodeInfo
 				if json.Unmarshal(data, &info) == nil {
 					status = info.Status
 				}
 			}
 
+			hbStatus := "unknown"
+			if lastBeat, ok := heartbeats[workerBase]; ok {
+				if nowMs-lastBeat < 15000 {
+					hbStatus = "alive"
+				} else {
+					hbStatus = "failed"
+				}
+			}
+
 			result = append(result, WorkerInfo{
-				ID:       w,
-				IsLeader: w == leader,
-				Status:   status,
+				ID:        w,
+				IsLeader:  w == leader,
+				Status:    status,
+				Heartbeat: hbStatus,
 			})
 		}
 
 		c.JSON(http.StatusOK, gin.H{"workers": result, "count": len(result)})
 	})
 
-	// GET /nodes - returns all cluster nodes (from /nodes in ZK)
+	// GET /nodes
 	r.GET("/nodes", func(c *gin.Context) {
 		nodes, err := GetClusterNodes(zkClient)
 		if err != nil {
@@ -112,7 +123,7 @@ func RegisterRoutes(r *gin.Engine, zkClient *ZKClient, db *sql.DB) {
 		c.JSON(http.StatusOK, gin.H{"nodes": nodes, "count": len(nodes)})
 	})
 
-	// GET /tasks - returns all tasks from PostgreSQL
+	// GET /tasks
 	r.GET("/tasks", func(c *gin.Context) {
 		tasks, err := GetAllTasks(db)
 		if err != nil {
@@ -122,7 +133,7 @@ func RegisterRoutes(r *gin.Engine, zkClient *ZKClient, db *sql.DB) {
 		c.JSON(http.StatusOK, gin.H{"tasks": tasks, "count": len(tasks)})
 	})
 
-	// POST /tasks - creates a new task
+	// POST /tasks
 	r.POST("/tasks", func(c *gin.Context) {
 		var req struct {
 			Name        string `json:"name" binding:"required"`
@@ -171,7 +182,6 @@ func RegisterRoutes(r *gin.Engine, zkClient *ZKClient, db *sql.DB) {
 			return
 		}
 
-		// Determine source node
 		sourceNode := "api-server"
 		if clusterNode != nil {
 			sourceNode = clusterNode.NodeID
@@ -180,7 +190,6 @@ func RegisterRoutes(r *gin.Engine, zkClient *ZKClient, db *sql.DB) {
 		CreateEvent(db, "task_created", sourceNode,
 			"Task '"+task.Name+"' created (type: "+task.TaskType+", priority: "+task.Priority+")")
 
-		// Broadcast task creation via WebSocket
 		if hub != nil {
 			msg, _ := json.Marshal(map[string]interface{}{
 				"type":    "task_created",
@@ -194,13 +203,153 @@ func RegisterRoutes(r *gin.Engine, zkClient *ZKClient, db *sql.DB) {
 		c.JSON(http.StatusCreated, gin.H{"task": task})
 	})
 
-	// PUT /workers/:id/deactivate - deactivate a worker (master only)
+	// DELETE /tasks/:id — master only
+	r.DELETE("/tasks/:id", func(c *gin.Context) {
+		if clusterNode != nil && !clusterNode.IsLeader {
+			c.JSON(http.StatusForbidden, gin.H{"error": "Only master can delete tasks"})
+			return
+		}
+
+		taskIDStr := c.Param("id")
+		taskID, err := strconv.Atoi(taskIDStr)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid task id"})
+			return
+		}
+
+		nodeID := "master"
+		if clusterNode != nil {
+			nodeID = clusterNode.NodeID
+			clusterNode.mutex.AcquireCS(fmt.Sprintf("delete task %d", taskID), nodeID, db)
+		}
+
+		db.Exec(`DELETE FROM task_logs WHERE task_id=$1`, taskID)
+		db.Exec(`DELETE FROM tasks WHERE id=$1`, taskID)
+		zkClient.DeleteTaskZNode(taskID)
+
+		if clusterNode != nil {
+			clusterNode.mutex.ReleaseCS(fmt.Sprintf("deleted task %d", taskID), nodeID, db)
+		}
+
+		CreateEvent(db, "task_deleted", nodeID, fmt.Sprintf("Task %d deleted by master", taskID))
+
+		if hub != nil {
+			msg, _ := json.Marshal(map[string]interface{}{
+				"type":    "task_deleted",
+				"task_id": taskID,
+			})
+			hub.Broadcast(msg)
+		}
+
+		c.JSON(http.StatusOK, gin.H{"message": fmt.Sprintf("Task %d deleted", taskID)})
+	})
+
+	// DELETE /tasks — delete ALL tasks, master only
+	r.DELETE("/tasks", func(c *gin.Context) {
+		if clusterNode != nil && !clusterNode.IsLeader {
+			c.JSON(http.StatusForbidden, gin.H{"error": "Only master can delete tasks"})
+			return
+		}
+
+		nodeID := "master"
+		if clusterNode != nil {
+			nodeID = clusterNode.NodeID
+			clusterNode.mutex.AcquireCS("delete all tasks", nodeID, db)
+		}
+
+		rows, err := db.Query(`SELECT id FROM tasks`)
+		if err == nil {
+			defer rows.Close()
+			for rows.Next() {
+				var id int
+				rows.Scan(&id)
+				zkClient.DeleteTaskZNode(id)
+			}
+		}
+
+		db.Exec(`DELETE FROM task_logs`)
+		db.Exec(`DELETE FROM tasks`)
+
+		if clusterNode != nil {
+			clusterNode.mutex.ReleaseCS("deleted all tasks", nodeID, db)
+		}
+
+		CreateEvent(db, "task_deleted", nodeID, "All tasks deleted by master")
+
+		if hub != nil {
+			msg, _ := json.Marshal(map[string]interface{}{"type": "tasks_cleared"})
+			hub.Broadcast(msg)
+		}
+
+		c.JSON(http.StatusOK, gin.H{"message": "All tasks deleted"})
+	})
+
+	// POST /workers/add — master only
+	r.POST("/workers/add", func(c *gin.Context) {
+		if clusterNode != nil && !clusterNode.IsLeader {
+			c.JSON(http.StatusForbidden, gin.H{"error": "Only master can add workers"})
+			return
+		}
+
+		nodeID := "master"
+		nodeIP := ""
+		if clusterNode != nil {
+			nodeID = clusterNode.NodeID
+			nodeIP = clusterNode.IP
+			clusterNode.mutex.AcquireCS("add worker", nodeID, db)
+		}
+
+		newWorkerID, err := AddDynamicWorker(zkClient, db, nodeIP)
+		if err != nil {
+			if clusterNode != nil {
+				clusterNode.mutex.ReleaseCS("add worker failed", nodeID, db)
+			}
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+
+		if clusterNode != nil {
+			clusterNode.mutex.ReleaseCS("added worker "+newWorkerID, nodeID, db)
+		}
+
+		c.JSON(http.StatusCreated, gin.H{"worker_id": newWorkerID, "message": "Worker added to cluster"})
+	})
+
+	// DELETE /workers/:id — master only
+	r.DELETE("/workers/:id", func(c *gin.Context) {
+		if clusterNode != nil && !clusterNode.IsLeader {
+			c.JSON(http.StatusForbidden, gin.H{"error": "Only master can remove workers"})
+			return
+		}
+
+		workerID := c.Param("id")
+		nodeID := "master"
+		if clusterNode != nil {
+			nodeID = clusterNode.NodeID
+			clusterNode.mutex.AcquireCS("remove worker "+workerID, nodeID, db)
+		}
+
+		if err := RemoveDynamicWorker(zkClient, db, workerID); err != nil {
+			if clusterNode != nil {
+				clusterNode.mutex.ReleaseCS("remove worker failed", nodeID, db)
+			}
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+
+		if clusterNode != nil {
+			clusterNode.mutex.ReleaseCS("removed worker "+workerID, nodeID, db)
+		}
+
+		c.JSON(http.StatusOK, gin.H{"message": "Worker " + workerID + " removed"})
+	})
+
+	// PUT /workers/:id/deactivate
 	r.PUT("/workers/:id/deactivate", func(c *gin.Context) {
 		if clusterNode != nil && !clusterNode.IsLeader {
 			c.JSON(http.StatusForbidden, gin.H{"error": "Only the master node can deactivate workers"})
 			return
 		}
-
 		workerID := c.Param("id")
 		if err := DeactivateWorker(zkClient, db, workerID); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -209,13 +358,12 @@ func RegisterRoutes(r *gin.Engine, zkClient *ZKClient, db *sql.DB) {
 		c.JSON(http.StatusOK, gin.H{"message": "Worker " + workerID + " deactivated"})
 	})
 
-	// PUT /workers/:id/activate - activate a worker (master only)
+	// PUT /workers/:id/activate
 	r.PUT("/workers/:id/activate", func(c *gin.Context) {
 		if clusterNode != nil && !clusterNode.IsLeader {
 			c.JSON(http.StatusForbidden, gin.H{"error": "Only the master node can activate workers"})
 			return
 		}
-
 		workerID := c.Param("id")
 		if err := ActivateWorker(zkClient, db, workerID); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -224,23 +372,36 @@ func RegisterRoutes(r *gin.Engine, zkClient *ZKClient, db *sql.DB) {
 		c.JSON(http.StatusOK, gin.H{"message": "Worker " + workerID + " activated"})
 	})
 
-	// GET /assignments - returns assignments per worker from DB
+	// GET /snapshot — Chandy-Lamport snapshot
+	r.GET("/snapshot", func(c *gin.Context) {
+		snapshot := GetClusterSnapshot(zkClient, db)
+		nodeID := "unknown"
+		if clusterNode != nil {
+			nodeID = clusterNode.NodeID
+		}
+		CreateEvent(db, "snapshot_taken", nodeID, "Cluster snapshot captured (Chandy-Lamport)")
+		if hub != nil {
+			msg, _ := json.Marshal(map[string]interface{}{"type": "snapshot_taken"})
+			hub.Broadcast(msg)
+		}
+		c.JSON(http.StatusOK, snapshot)
+	})
+
+	// GET /assignments
 	r.GET("/assignments", func(c *gin.Context) {
 		assignments, err := GetAssignments(db)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
-
 		zkAssignments, _ := zkClient.GetAssignmentZNodes()
-
 		c.JSON(http.StatusOK, gin.H{
 			"assignments":    assignments,
 			"zk_assignments": zkAssignments,
 		})
 	})
 
-	// GET /stats - returns task count by status and by type
+	// GET /stats
 	r.GET("/stats", func(c *gin.Context) {
 		rows, err := db.Query(`SELECT status, COUNT(*) as count FROM tasks GROUP BY status`)
 		if err != nil {
@@ -283,7 +444,7 @@ func RegisterRoutes(r *gin.Engine, zkClient *ZKClient, db *sql.DB) {
 		c.JSON(http.StatusOK, gin.H{"stats": stats, "type_stats": typeStats})
 	})
 
-	// GET /logs/:task_id - returns logs for a specific task
+	// GET /logs/:task_id
 	r.GET("/logs/:task_id", func(c *gin.Context) {
 		taskIDStr := c.Param("task_id")
 		taskID, err := strconv.Atoi(taskIDStr)
@@ -318,14 +479,13 @@ func RegisterRoutes(r *gin.Engine, zkClient *ZKClient, db *sql.DB) {
 		c.JSON(http.StatusOK, gin.H{"logs": logs})
 	})
 
-	// GET /events - returns recent system events
+	// GET /events
 	r.GET("/events", func(c *gin.Context) {
 		limitStr := c.DefaultQuery("limit", "50")
 		limit, err := strconv.Atoi(limitStr)
 		if err != nil {
 			limit = 50
 		}
-
 		events, err := GetRecentEvents(db, limit)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})

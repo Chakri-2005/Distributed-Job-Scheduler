@@ -4,6 +4,9 @@ import { fetchLogs } from '../services/api';
 
 interface TaskListProps {
     tasks: Task[];
+    isMaster: boolean;
+    onDeleteTask: (taskId: number) => Promise<void>;
+    onDeleteAllTasks: () => Promise<void>;
 }
 
 const STATUS_COLORS: Record<string, string> = {
@@ -32,18 +35,18 @@ const TYPE_LABELS: Record<string, string> = {
     ai_job: 'AI Job',
 };
 
-export default function TaskList({ tasks }: TaskListProps) {
+export default function TaskList({ tasks, isMaster, onDeleteTask, onDeleteAllTasks }: TaskListProps) {
     const [filter, setFilter] = useState<string>('all');
     const [expandedTask, setExpandedTask] = useState<number | null>(null);
     const [logs, setLogs] = useState<LogEntry[]>([]);
     const [logsLoading, setLogsLoading] = useState(false);
+    const [confirmDeleteAll, setConfirmDeleteAll] = useState(false);
 
     const filtered = filter === 'all' ? tasks : tasks.filter(t => t.status === filter || t.task_type === filter);
 
     const formatTime = (iso: string) => {
         if (!iso) return '—';
-        const d = new Date(iso);
-        return d.toLocaleTimeString();
+        return new Date(iso).toLocaleTimeString();
     };
 
     const formatDuration = (task: Task): string => {
@@ -70,12 +73,31 @@ export default function TaskList({ tasks }: TaskListProps) {
         }
     };
 
+    const handleDeleteAll = async () => {
+        if (!confirmDeleteAll) {
+            setConfirmDeleteAll(true);
+            setTimeout(() => setConfirmDeleteAll(false), 3000);
+            return;
+        }
+        setConfirmDeleteAll(false);
+        await onDeleteAllTasks();
+    };
+
     return (
         <div className="card task-list-card">
             <div className="card-header">
                 <span className="card-icon">📋</span>
                 <h2 className="card-title">Tasks</h2>
                 <span className="badge">{tasks.length}</span>
+                {isMaster && (
+                    <button
+                        className={`delete-all-btn ${confirmDeleteAll ? 'confirm' : ''}`}
+                        onClick={handleDeleteAll}
+                        title="Delete all tasks"
+                    >
+                        {confirmDeleteAll ? '⚠️ Confirm Delete All' : '🗑 Delete All Tasks'}
+                    </button>
+                )}
             </div>
 
             <div className="task-filters">
@@ -114,12 +136,13 @@ export default function TaskList({ tasks }: TaskListProps) {
                             <th>Created</th>
                             <th>Duration</th>
                             <th>Logs</th>
+                            {isMaster && <th>Delete</th>}
                         </tr>
                     </thead>
                     <tbody>
                         {filtered.length === 0 ? (
                             <tr>
-                                <td colSpan={10} className="empty-row">
+                                <td colSpan={isMaster ? 11 : 10} className="empty-row">
                                     {filter === 'all' ? 'No tasks yet — create one!' : `No ${filter} tasks`}
                                 </td>
                             </tr>
@@ -170,10 +193,21 @@ export default function TaskList({ tasks }: TaskListProps) {
                                                 📜
                                             </button>
                                         </td>
+                                        {isMaster && (
+                                            <td>
+                                                <button
+                                                    className="task-delete-btn"
+                                                    onClick={() => onDeleteTask(task.id)}
+                                                    title="Delete this task"
+                                                >
+                                                    🗑
+                                                </button>
+                                            </td>
+                                        )}
                                     </tr>
                                     {expandedTask === task.id && (
                                         <tr key={`logs-${task.id}`} className="logs-row">
-                                            <td colSpan={10}>
+                                            <td colSpan={isMaster ? 11 : 10}>
                                                 <div className="logs-panel">
                                                     <div className="logs-header">
                                                         <span>📜 Execution Logs — Task #{task.id}</span>

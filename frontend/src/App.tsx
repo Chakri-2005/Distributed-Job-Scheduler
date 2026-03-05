@@ -1,5 +1,9 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { fetchLeader, fetchWorkers, fetchTasks, fetchStats, fetchEvents, fetchNodeInfo, createTask, getWebSocketUrl, deactivateWorker, activateWorker } from './services/api';
+import {
+  fetchLeader, fetchWorkers, fetchTasks, fetchStats, fetchEvents, fetchNodeInfo,
+  createTask, getWebSocketUrl, deactivateWorker, activateWorker,
+  addWorker, removeWorker, deleteTask, deleteAllTasks
+} from './services/api';
 import type { Task, Worker, Stat, SystemEvent, TaskType, Priority, NodeInfoData } from './services/api';
 import Dashboard from './pages/Dashboard';
 import './App.css';
@@ -42,52 +46,33 @@ function App() {
     }
   }, []);
 
-  // WebSocket connection for real-time updates
   const connectWebSocket = useCallback(() => {
     try {
       const wsUrl = getWebSocketUrl();
       const ws = new WebSocket(wsUrl);
 
-      ws.onopen = () => {
-        console.log('WebSocket connected');
-      };
-
-      ws.onmessage = () => {
-        // On any WebSocket message, refresh all data
-        fetchAll();
-      };
-
+      ws.onopen = () => { console.log('WebSocket connected'); };
+      ws.onmessage = () => { fetchAll(); };
       ws.onclose = () => {
         console.log('WebSocket disconnected, reconnecting in 3s...');
         reconnectTimeoutRef.current = setTimeout(connectWebSocket, 3000);
       };
-
-      ws.onerror = () => {
-        ws.close();
-      };
+      ws.onerror = () => { ws.close(); };
 
       wsRef.current = ws;
     } catch {
-      // WebSocket not available, fall back to polling
+      // fallback to polling
     }
   }, [fetchAll]);
 
   useEffect(() => {
     fetchAll();
-    // Poll every 2 seconds for real-time updates
     const interval = setInterval(fetchAll, 2000);
-
-    // Connect WebSocket for immediate updates
     connectWebSocket();
-
     return () => {
       clearInterval(interval);
-      if (wsRef.current) {
-        wsRef.current.close();
-      }
-      if (reconnectTimeoutRef.current) {
-        clearTimeout(reconnectTimeoutRef.current);
-      }
+      if (wsRef.current) wsRef.current.close();
+      if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
     };
   }, [fetchAll, connectWebSocket]);
 
@@ -97,22 +82,30 @@ function App() {
   };
 
   const handleDeactivateWorker = async (workerId: string) => {
-    try {
-      await deactivateWorker(workerId);
-      await fetchAll();
-    } catch {
-      // Permission denied for slaves
-    }
+    try { await deactivateWorker(workerId); await fetchAll(); } catch { /* slave */ }
   };
 
   const handleActivateWorker = async (workerId: string) => {
-    try {
-      await activateWorker(workerId);
-      await fetchAll();
-    } catch {
-      // Permission denied for slaves
-    }
+    try { await activateWorker(workerId); await fetchAll(); } catch { /* slave */ }
   };
+
+  const handleAddWorker = async () => {
+    try { await addWorker(); await fetchAll(); } catch { /* slave */ }
+  };
+
+  const handleRemoveWorker = async (workerId: string) => {
+    try { await removeWorker(workerId); await fetchAll(); } catch { /* slave */ }
+  };
+
+  const handleDeleteTask = async (taskId: number) => {
+    try { await deleteTask(taskId); await fetchAll(); } catch { /* slave */ }
+  };
+
+  const handleDeleteAllTasks = async () => {
+    try { await deleteAllTasks(); await fetchAll(); } catch { /* slave */ }
+  };
+
+  const isMaster = nodeInfo?.role === 'master' || nodeInfo?.is_leader === true;
 
   return (
     <div className="app">
@@ -126,10 +119,15 @@ function App() {
         loading={loading}
         error={error}
         nodeInfo={nodeInfo}
+        isMaster={isMaster}
         onCreateTask={handleCreateTask}
         onRefresh={fetchAll}
         onDeactivateWorker={handleDeactivateWorker}
         onActivateWorker={handleActivateWorker}
+        onAddWorker={handleAddWorker}
+        onRemoveWorker={handleRemoveWorker}
+        onDeleteTask={handleDeleteTask}
+        onDeleteAllTasks={handleDeleteAllTasks}
       />
     </div>
   );
