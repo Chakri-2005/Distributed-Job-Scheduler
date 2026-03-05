@@ -38,11 +38,15 @@ var clusterNode *ClusterNode
 
 // NewClusterNode creates and initializes a cluster node
 func NewClusterNode(nodeID, port, ip string, zkClient *ZKClient, db *sql.DB) *ClusterNode {
+	role := "slave"
+	if port == "8080" {
+		role = "master"
+	}
 	return &ClusterNode{
 		NodeID:   nodeID,
 		Port:     port,
 		IP:       ip,
-		Role:     "slave",
+		Role:     role,
 		ZKClient: zkClient,
 		DB:       db,
 	}
@@ -120,89 +124,26 @@ func (cn *ClusterNode) registerNodeMetadata() {
 	}
 }
 
-// runElection performs leader election using ZK ephemeral sequential nodes
+// runElection performs static role initialization
 func (cn *ClusterNode) runElection() {
-	for {
-		isLeader, watchCh, err := cn.tryBecomeLeader()
-		if err != nil {
-			log.Printf("Node %s: election error: %v, retrying...", cn.NodeID, err)
-			time.Sleep(2 * time.Second)
-			continue
-		}
+	if cn.Role == "master" {
+		log.Printf("🏆 Node %s is statically assigned as MASTER!", cn.NodeID)
+		cn.IsLeader = true
+		cn.onBecomeLeader()
 
-		if isLeader {
-			log.Printf("🏆 Node %s is now MASTER!", cn.NodeID)
-			cn.IsLeader = true
-			cn.Role = "master"
-			cn.onBecomeLeader()
+		// Update node metadata
+		cn.registerNodeMetadata()
 
-			// Update node metadata
-			cn.registerNodeMetadata()
+		// Master runs its duties, block forever here
+		select {}
+	} else {
+		log.Printf("Node %s is statically assigned as a SLAVE, waiting for commands...", cn.NodeID)
+		cn.IsLeader = false
+		cn.registerNodeMetadata()
 
-			if watchCh != nil {
-				<-watchCh
-			}
-		} else {
-			log.Printf("Node %s is a SLAVE, watching predecessor...", cn.NodeID)
-			cn.IsLeader = false
-			cn.Role = "slave"
-			cn.registerNodeMetadata()
-
-			if watchCh != nil {
-				event := <-watchCh
-				log.Printf("Node %s: predecessor gone (event: %v), re-running election...", cn.NodeID, event.Type)
-				CreateEvent(cn.DB, "failover", cn.NodeID,
-					fmt.Sprintf("Node %s detected predecessor failure, re-electing...", cn.NodeID))
-			}
-		}
+		// Slaves simply wait for commands, block forever here
+		select {}
 	}
-}
-
-// tryBecomeLeader checks if this node has the smallest sequence number
-func (cn *ClusterNode) tryBecomeLeader() (bool, <-chan zk.Event, error) {
-	children, _, err := cn.ZKClient.conn.Children("/workers")
-	if err != nil {
-		return false, nil, err
-	}
-
-	if len(children) == 0 {
-		return false, nil, fmt.Errorf("no workers found")
-	}
-
-	myNodeName := cn.MyZNode
-	if idx := strings.LastIndex(myNodeName, "/"); idx >= 0 {
-		myNodeName = myNodeName[idx+1:]
-	}
-
-	// Sort children
-	sortStrings(children)
-
-	myPos := -1
-	for i, child := range children {
-		if child == myNodeName {
-			myPos = i
-			break
-		}
-	}
-
-	if myPos == -1 {
-		log.Printf("Node %s: my node disappeared, re-registering...", cn.NodeID)
-		return false, nil, fmt.Errorf("node disappeared, need re-register")
-	}
-
-	if myPos == 0 {
-		return true, nil, nil
-	}
-
-	// Watch predecessor (chain-watch pattern)
-	predecessor := "/workers/" + children[myPos-1]
-	_, _, watchCh, err := cn.ZKClient.conn.ExistsW(predecessor)
-	if err != nil {
-		return false, nil, err
-	}
-	log.Printf("Node %s watching predecessor: %s", cn.NodeID, predecessor)
-
-	return false, watchCh, nil
 }
 
 // onBecomeLeader is called when this node becomes the leader

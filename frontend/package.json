@@ -4,7 +4,7 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "node ../scripts/cluster-start.mjs",
+    "dev": "node cluster-dev.mjs",
     "dev:vite": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
